@@ -10,8 +10,12 @@ safety_supervisor:
     command_rate_hz: 500.0
     policy_rate_hz: 250.0
     phase_period_seconds: 1.0
-    low_state_timeout_seconds: 0.020
-    policy_timeout_seconds: 0.020
+    # Desktop-safe defaults for the CLI-driven loopback tests. A reviewed
+    # hardware profile must choose watchdogs for its actual control transport
+    # and timing guarantees; ordinary non-real-time Linux can occasionally
+    # pause a process for longer than 20 ms.
+    low_state_timeout_seconds: 0.100
+    policy_timeout_seconds: 0.100
 
     ready_transition_seconds: 2.0
     neutral_transition_seconds: 3.0

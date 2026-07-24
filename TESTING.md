@@ -9,6 +9,10 @@ All commands assume the repository is at `/home/fengjun/robot`. Commands using
 `setup_local.sh` communicate over loopback only. Commands using `setup.sh` use
 the robot network interface configured by the Unitree installation.
 
+The commands below assume Zsh, matching the development machine. When using
+Bash instead, replace `source install/setup.zsh` with
+`source install/setup.bash`.
+
 ## Level 0: Build and unit tests
 
 **Risk:** None. No ROS nodes or DDS command publishers are started.
@@ -23,7 +27,7 @@ Run:
 cd /home/fengjun/robot/ws_control
 source /home/fengjun/robot/vendor/unitree_ros2/setup_local.sh
 colcon build --symlink-install --packages-select go2_nn_control
-source install/setup.bash
+source install/setup.zsh
 colcon test --packages-select go2_nn_control --event-handlers console_direct+
 colcon test-result --verbose
 ```
@@ -64,7 +68,7 @@ Terminal 1:
 ```bash
 cd /home/fengjun/robot/ws_control
 source /home/fengjun/robot/vendor/unitree_ros2/setup_local.sh
-source install/setup.bash
+source install/setup.zsh
 ros2 launch go2_nn_control control.launch.py keyboard:=false
 ```
 
@@ -79,7 +83,7 @@ Confirm the topic isolation in Terminal 2:
 ```bash
 cd /home/fengjun/robot/ws_control
 source /home/fengjun/robot/vendor/unitree_ros2/setup_local.sh
-source install/setup.bash
+source install/setup.zsh
 ros2 topic list | sort
 ros2 topic info /ws_control/test_lowcmd
 ```
@@ -114,13 +118,17 @@ Inspect a single message in Terminal 3:
 ```bash
 cd /home/fengjun/robot/ws_control
 source /home/fengjun/robot/vendor/unitree_ros2/setup_local.sh
-source install/setup.bash
-ros2 topic echo --once /ws_control/status
-ros2 topic echo --once /ws_control/observation
+source install/setup.zsh
+ros2 topic echo /ws_control/status
+# Press Ctrl-C after the first message, then run:
+ros2 topic echo /ws_control/observation
+# Press Ctrl-C after the first message, then run:
 ros2 topic hz /ws_control/observation
 ```
 
-Press `Ctrl-C` after `ros2 topic hz` reports enough samples.
+This ROS 2 Foxy installation does not provide `ros2 topic echo --once`. Press
+`Ctrl-C` after the first complete message from each `topic echo`, and after
+`topic hz` reports enough samples.
 
 ### 3. Exercise the lifecycle
 
@@ -128,14 +136,22 @@ In Terminal 3:
 
 ```bash
 ros2 service call /ws_control/acknowledge_ownership std_srvs/srv/Trigger "{}"
+ros2 topic echo /ws_control/status
+# Press Ctrl-C after the first message. Confirm state: PASSIVE,
+# ownership_acknowledged: true, low_state_healthy: true, and
+# estop_latched: false before continuing.
 ros2 service call /ws_control/arm std_srvs/srv/Trigger "{}"
 sleep 3
-ros2 topic echo --once /ws_control/status
+ros2 topic echo /ws_control/status
+# Press Ctrl-C after the first message.
 ros2 service call /ws_control/start_policy std_srvs/srv/Trigger "{}"
 sleep 1
-ros2 topic echo --once /ws_control/status
-ros2 topic echo --once /ws_control/policy_action
-ros2 topic echo --once /ws_control/applied_command
+ros2 topic echo /ws_control/status
+# Press Ctrl-C after the first message.
+ros2 topic echo /ws_control/policy_action
+# Press Ctrl-C after the first message.
+ros2 topic echo /ws_control/applied_command
+# Press Ctrl-C after the first message.
 ```
 
 Expected behavior:
@@ -149,14 +165,24 @@ Expected behavior:
 - Applied Kp/Kd values match the experiment YAML.
 - The processed phase is ordered `[cos, sin]` and changes over time.
 
+Ownership acknowledgment does not change the control state. If the pre-arm
+status is `ESTOP`, keep the fake-state publisher running and call
+`/ws_control/reset_estop`, then confirm the state returned to `PASSIVE`. If it
+is another non-passive state, complete that lifecycle or restart the launch.
+The `arm` service also rejects stale low state or more than one publisher on
+the configured low-command topic; inspect all four status fields above and
+`ros2 topic info /ws_control/test_lowcmd` when diagnosing a rejection.
+
 Stop and recover:
 
 ```bash
 ros2 service call /ws_control/stop_policy std_srvs/srv/Trigger "{}"
-ros2 topic echo --once /ws_control/status
+ros2 topic echo /ws_control/status
+# Press Ctrl-C after the first message.
 ros2 service call /ws_control/recover std_srvs/srv/Trigger "{}"
 sleep 4
-ros2 topic echo --once /ws_control/status
+ros2 topic echo /ws_control/status
+# Press Ctrl-C after the first message.
 ```
 
 Expected behavior: states progress through `HOLD_CURRENT`,
@@ -166,11 +192,14 @@ Expected behavior: states progress through `HOLD_CURRENT`,
 
 ```bash
 ros2 service call /ws_control/estop std_srvs/srv/Trigger "{}"
-ros2 topic echo --once /ws_control/status
-ros2 topic echo --once /ws_control/applied_command
+ros2 topic echo /ws_control/status
+# Press Ctrl-C after the first message.
+ros2 topic echo /ws_control/applied_command
+# Press Ctrl-C after the first message.
 ros2 service call /ws_control/arm std_srvs/srv/Trigger "{}"
 ros2 service call /ws_control/reset_estop std_srvs/srv/Trigger "{}"
-ros2 topic echo --once /ws_control/status
+ros2 topic echo /ws_control/status
+# Press Ctrl-C after the first message.
 ```
 
 Expected behavior:
@@ -192,8 +221,11 @@ ros2 topic pub --once /ws_control/estop_request std_msgs/msg/Bool "{data: true}"
 Repeat the arm and policy-start sequence, then stop the fake low-state
 publisher in Terminal 2 with `Ctrl-C`.
 
-Expected behavior: within approximately 20 ms, status enters a latched `ESTOP`
-with a low-state watchdog fault and commands become passive.
+Expected behavior: within approximately 100 ms, status enters a latched
+`ESTOP` with a low-state watchdog fault and commands become passive. The
+software-test profile deliberately allows normal desktop scheduling jitter;
+a reviewed hardware profile must select watchdog deadlines appropriate to its
+control transport and timing guarantees.
 
 ### 6. Verify the bag
 
@@ -233,7 +265,8 @@ Run:
 source /home/fengjun/robot/vendor/unitree_ros2/setup.sh
 ros2 topic info /lowcmd
 ros2 topic hz /lowstate
-ros2 topic echo --once /lowstate
+ros2 topic echo /lowstate
+# Press Ctrl-C after the first message.
 ```
 
 Expected behavior:
@@ -276,7 +309,7 @@ Launch:
 ```bash
 source /home/fengjun/robot/vendor/unitree_ros2/setup.sh
 cd /home/fengjun/robot/ws_control
-source install/setup.bash
+source install/setup.zsh
 ros2 launch go2_nn_control control.launch.py \
   config:=/absolute/path/to/reviewed_experiment.yaml \
   hardware_mode:=true \
@@ -287,10 +320,13 @@ ros2 launch go2_nn_control control.launch.py \
 In another configured terminal:
 
 ```bash
-ros2 topic echo --once /ws_control/status
-ros2 topic echo --once /ws_control/applied_command
+ros2 topic echo /ws_control/status
+# Press Ctrl-C after the first message.
+ros2 topic echo /ws_control/applied_command
+# Press Ctrl-C after the first message.
 ros2 service call /ws_control/estop std_srvs/srv/Trigger "{}"
-ros2 topic echo --once /ws_control/applied_command
+ros2 topic echo /ws_control/applied_command
+# Press Ctrl-C after the first message.
 ros2 service call /ws_control/reset_estop std_srvs/srv/Trigger "{}"
 ```
 
@@ -353,10 +389,13 @@ Start the hardware launch, then:
 ```bash
 ros2 service call /ws_control/arm std_srvs/srv/Trigger "{}"
 # Wait for READY_HOLD and inspect the robot.
-ros2 topic echo --once /ws_control/status
+ros2 topic echo /ws_control/status
+# Press Ctrl-C after the first message.
 ros2 service call /ws_control/start_policy std_srvs/srv/Trigger "{}"
-ros2 topic echo --once /ws_control/observation
-ros2 topic echo --once /ws_control/policy_action
+ros2 topic echo /ws_control/observation
+# Press Ctrl-C after the first message.
+ros2 topic echo /ws_control/policy_action
+# Press Ctrl-C after the first message.
 ros2 service call /ws_control/stop_policy std_srvs/srv/Trigger "{}"
 ros2 service call /ws_control/recover std_srvs/srv/Trigger "{}"
 ```
@@ -389,7 +428,7 @@ before any ground test:
 cd /home/fengjun/robot/ws_control
 source /home/fengjun/robot/vendor/unitree_ros2/setup_local.sh
 colcon build --symlink-install --packages-select go2_nn_control
-source install/setup.bash
+source install/setup.zsh
 colcon test --packages-select go2_nn_control
 colcon test-result --verbose
 ```

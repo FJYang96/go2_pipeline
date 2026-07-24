@@ -79,6 +79,7 @@ code span.wa { color: #60a0b0; font-weight: bold; font-style: italic; } /* Warni
 <h1 id="go2-controller-test-manual">Go2 Controller Test Manual</h1>
 <p>This manual progresses from tests that cannot command hardware to tests that produce real actuator torque. Do not skip levels. A successful software test does not establish that gains, joint limits, stance targets, or a learned policy are safe for a physical robot.</p>
 <p>All commands assume the repository is at <code>/home/fengjun/robot</code>. Commands using <code>setup_local.sh</code> communicate over loopback only. Commands using <code>setup.sh</code> use the robot network interface configured by the Unitree installation.</p>
+<p>The commands below assume Zsh, matching the development machine. When using Bash instead, replace <code>source install/setup.zsh</code> with <code>source install/setup.bash</code>.</p>
 <h2 id="level-0-build-and-unit-tests">Level 0: Build and unit tests</h2>
 <p><strong>Risk:</strong> None. No ROS nodes or DDS command publishers are started.</p>
 <p><strong>Goal:</strong> Verify compilation, quaternion math, the exact 33D observation ordering, Unitree-to-policy joint permutation, CRC generation, and the configuration schema.</p>
@@ -86,7 +87,7 @@ code span.wa { color: #60a0b0; font-weight: bold; font-style: italic; } /* Warni
 <div class="sourceCode" id="cb1"><pre class="sourceCode bash"><code class="sourceCode bash"><a class="sourceLine" id="cb1-1" title="1"><span class="bu">cd</span> /home/fengjun/robot/ws_control</a>
 <a class="sourceLine" id="cb1-2" title="2"><span class="bu">source</span> /home/fengjun/robot/vendor/unitree_ros2/setup_local.sh</a>
 <a class="sourceLine" id="cb1-3" title="3"><span class="ex">colcon</span> build --symlink-install --packages-select go2_nn_control</a>
-<a class="sourceLine" id="cb1-4" title="4"><span class="bu">source</span> install/setup.bash</a>
+<a class="sourceLine" id="cb1-4" title="4"><span class="bu">source</span> install/setup.zsh</a>
 <a class="sourceLine" id="cb1-5" title="5"><span class="ex">colcon</span> test --packages-select go2_nn_control --event-handlers console_direct+</a>
 <a class="sourceLine" id="cb1-6" title="6"><span class="ex">colcon</span> test-result --verbose</a></code></pre></div>
 <p>Alternatively, after building:</p>
@@ -108,7 +109,7 @@ code span.wa { color: #60a0b0; font-weight: bold; font-style: italic; } /* Warni
 <p>Terminal 1:</p>
 <div class="sourceCode" id="cb3"><pre class="sourceCode bash"><code class="sourceCode bash"><a class="sourceLine" id="cb3-1" title="1"><span class="bu">cd</span> /home/fengjun/robot/ws_control</a>
 <a class="sourceLine" id="cb3-2" title="2"><span class="bu">source</span> /home/fengjun/robot/vendor/unitree_ros2/setup_local.sh</a>
-<a class="sourceLine" id="cb3-3" title="3"><span class="bu">source</span> install/setup.bash</a>
+<a class="sourceLine" id="cb3-3" title="3"><span class="bu">source</span> install/setup.zsh</a>
 <a class="sourceLine" id="cb3-4" title="4"><span class="ex">ros2</span> launch go2_nn_control control.launch.py keyboard:=false</a></code></pre></div>
 <p>Expected behavior:</p>
 <ul>
@@ -119,7 +120,7 @@ code span.wa { color: #60a0b0; font-weight: bold; font-style: italic; } /* Warni
 <p>Confirm the topic isolation in Terminal 2:</p>
 <div class="sourceCode" id="cb4"><pre class="sourceCode bash"><code class="sourceCode bash"><a class="sourceLine" id="cb4-1" title="1"><span class="bu">cd</span> /home/fengjun/robot/ws_control</a>
 <a class="sourceLine" id="cb4-2" title="2"><span class="bu">source</span> /home/fengjun/robot/vendor/unitree_ros2/setup_local.sh</a>
-<a class="sourceLine" id="cb4-3" title="3"><span class="bu">source</span> install/setup.bash</a>
+<a class="sourceLine" id="cb4-3" title="3"><span class="bu">source</span> install/setup.zsh</a>
 <a class="sourceLine" id="cb4-4" title="4"><span class="ex">ros2</span> topic list <span class="kw">|</span> <span class="fu">sort</span></a>
 <a class="sourceLine" id="cb4-5" title="5"><span class="ex">ros2</span> topic info /ws_control/test_lowcmd</a></code></pre></div>
 <p>Expected behavior: <code>/ws_control/test_lowcmd</code> has one publisher. <code>/lowcmd</code> should not appear unless an unrelated process created it.</p>
@@ -140,22 +141,32 @@ code span.wa { color: #60a0b0; font-weight: bold; font-style: italic; } /* Warni
 <p>Inspect a single message in Terminal 3:</p>
 <div class="sourceCode" id="cb6"><pre class="sourceCode bash"><code class="sourceCode bash"><a class="sourceLine" id="cb6-1" title="1"><span class="bu">cd</span> /home/fengjun/robot/ws_control</a>
 <a class="sourceLine" id="cb6-2" title="2"><span class="bu">source</span> /home/fengjun/robot/vendor/unitree_ros2/setup_local.sh</a>
-<a class="sourceLine" id="cb6-3" title="3"><span class="bu">source</span> install/setup.bash</a>
-<a class="sourceLine" id="cb6-4" title="4"><span class="ex">ros2</span> topic echo --once /ws_control/status</a>
-<a class="sourceLine" id="cb6-5" title="5"><span class="ex">ros2</span> topic echo --once /ws_control/observation</a>
-<a class="sourceLine" id="cb6-6" title="6"><span class="ex">ros2</span> topic hz /ws_control/observation</a></code></pre></div>
-<p>Press <code>Ctrl-C</code> after <code>ros2 topic hz</code> reports enough samples.</p>
+<a class="sourceLine" id="cb6-3" title="3"><span class="bu">source</span> install/setup.zsh</a>
+<a class="sourceLine" id="cb6-4" title="4"><span class="ex">ros2</span> topic echo /ws_control/status</a>
+<a class="sourceLine" id="cb6-5" title="5"><span class="co"># Press Ctrl-C after the first message, then run:</span></a>
+<a class="sourceLine" id="cb6-6" title="6"><span class="ex">ros2</span> topic echo /ws_control/observation</a>
+<a class="sourceLine" id="cb6-7" title="7"><span class="co"># Press Ctrl-C after the first message, then run:</span></a>
+<a class="sourceLine" id="cb6-8" title="8"><span class="ex">ros2</span> topic hz /ws_control/observation</a></code></pre></div>
+<p>This ROS 2 Foxy installation does not provide <code>ros2 topic echo --once</code>. Press <code>Ctrl-C</code> after the first complete message from each <code>topic echo</code>, and after <code>topic hz</code> reports enough samples.</p>
 <h3 id="exercise-the-lifecycle">3. Exercise the lifecycle</h3>
 <p>In Terminal 3:</p>
 <div class="sourceCode" id="cb7"><pre class="sourceCode bash"><code class="sourceCode bash"><a class="sourceLine" id="cb7-1" title="1"><span class="ex">ros2</span> service call /ws_control/acknowledge_ownership std_srvs/srv/Trigger <span class="st">&quot;{}&quot;</span></a>
-<a class="sourceLine" id="cb7-2" title="2"><span class="ex">ros2</span> service call /ws_control/arm std_srvs/srv/Trigger <span class="st">&quot;{}&quot;</span></a>
-<a class="sourceLine" id="cb7-3" title="3"><span class="fu">sleep</span> 3</a>
-<a class="sourceLine" id="cb7-4" title="4"><span class="ex">ros2</span> topic echo --once /ws_control/status</a>
-<a class="sourceLine" id="cb7-5" title="5"><span class="ex">ros2</span> service call /ws_control/start_policy std_srvs/srv/Trigger <span class="st">&quot;{}&quot;</span></a>
-<a class="sourceLine" id="cb7-6" title="6"><span class="fu">sleep</span> 1</a>
-<a class="sourceLine" id="cb7-7" title="7"><span class="ex">ros2</span> topic echo --once /ws_control/status</a>
-<a class="sourceLine" id="cb7-8" title="8"><span class="ex">ros2</span> topic echo --once /ws_control/policy_action</a>
-<a class="sourceLine" id="cb7-9" title="9"><span class="ex">ros2</span> topic echo --once /ws_control/applied_command</a></code></pre></div>
+<a class="sourceLine" id="cb7-2" title="2"><span class="ex">ros2</span> topic echo /ws_control/status</a>
+<a class="sourceLine" id="cb7-3" title="3"><span class="co"># Press Ctrl-C after the first message. Confirm state: PASSIVE,</span></a>
+<a class="sourceLine" id="cb7-4" title="4"><span class="co"># ownership_acknowledged: true, low_state_healthy: true, and</span></a>
+<a class="sourceLine" id="cb7-5" title="5"><span class="co"># estop_latched: false before continuing.</span></a>
+<a class="sourceLine" id="cb7-6" title="6"><span class="ex">ros2</span> service call /ws_control/arm std_srvs/srv/Trigger <span class="st">&quot;{}&quot;</span></a>
+<a class="sourceLine" id="cb7-7" title="7"><span class="fu">sleep</span> 3</a>
+<a class="sourceLine" id="cb7-8" title="8"><span class="ex">ros2</span> topic echo /ws_control/status</a>
+<a class="sourceLine" id="cb7-9" title="9"><span class="co"># Press Ctrl-C after the first message.</span></a>
+<a class="sourceLine" id="cb7-10" title="10"><span class="ex">ros2</span> service call /ws_control/start_policy std_srvs/srv/Trigger <span class="st">&quot;{}&quot;</span></a>
+<a class="sourceLine" id="cb7-11" title="11"><span class="fu">sleep</span> 1</a>
+<a class="sourceLine" id="cb7-12" title="12"><span class="ex">ros2</span> topic echo /ws_control/status</a>
+<a class="sourceLine" id="cb7-13" title="13"><span class="co"># Press Ctrl-C after the first message.</span></a>
+<a class="sourceLine" id="cb7-14" title="14"><span class="ex">ros2</span> topic echo /ws_control/policy_action</a>
+<a class="sourceLine" id="cb7-15" title="15"><span class="co"># Press Ctrl-C after the first message.</span></a>
+<a class="sourceLine" id="cb7-16" title="16"><span class="ex">ros2</span> topic echo /ws_control/applied_command</a>
+<a class="sourceLine" id="cb7-17" title="17"><span class="co"># Press Ctrl-C after the first message.</span></a></code></pre></div>
 <p>Expected behavior:</p>
 <ul>
 <li>Ownership acknowledgment succeeds in local mode.</li>
@@ -166,20 +177,26 @@ code span.wa { color: #60a0b0; font-weight: bold; font-style: italic; } /* Warni
 <li>Applied Kp/Kd values match the experiment YAML.</li>
 <li>The processed phase is ordered <code>[cos, sin]</code> and changes over time.</li>
 </ul>
+<p>Ownership acknowledgment does not change the control state. If the pre-arm status is <code>ESTOP</code>, keep the fake-state publisher running and call <code>/ws_control/reset_estop</code>, then confirm the state returned to <code>PASSIVE</code>. If it is another non-passive state, complete that lifecycle or restart the launch. The <code>arm</code> service also rejects stale low state or more than one publisher on the configured low-command topic; inspect all four status fields above and <code>ros2 topic info /ws_control/test_lowcmd</code> when diagnosing a rejection.</p>
 <p>Stop and recover:</p>
 <div class="sourceCode" id="cb8"><pre class="sourceCode bash"><code class="sourceCode bash"><a class="sourceLine" id="cb8-1" title="1"><span class="ex">ros2</span> service call /ws_control/stop_policy std_srvs/srv/Trigger <span class="st">&quot;{}&quot;</span></a>
-<a class="sourceLine" id="cb8-2" title="2"><span class="ex">ros2</span> topic echo --once /ws_control/status</a>
-<a class="sourceLine" id="cb8-3" title="3"><span class="ex">ros2</span> service call /ws_control/recover std_srvs/srv/Trigger <span class="st">&quot;{}&quot;</span></a>
-<a class="sourceLine" id="cb8-4" title="4"><span class="fu">sleep</span> 4</a>
-<a class="sourceLine" id="cb8-5" title="5"><span class="ex">ros2</span> topic echo --once /ws_control/status</a></code></pre></div>
+<a class="sourceLine" id="cb8-2" title="2"><span class="ex">ros2</span> topic echo /ws_control/status</a>
+<a class="sourceLine" id="cb8-3" title="3"><span class="co"># Press Ctrl-C after the first message.</span></a>
+<a class="sourceLine" id="cb8-4" title="4"><span class="ex">ros2</span> service call /ws_control/recover std_srvs/srv/Trigger <span class="st">&quot;{}&quot;</span></a>
+<a class="sourceLine" id="cb8-5" title="5"><span class="fu">sleep</span> 4</a>
+<a class="sourceLine" id="cb8-6" title="6"><span class="ex">ros2</span> topic echo /ws_control/status</a>
+<a class="sourceLine" id="cb8-7" title="7"><span class="co"># Press Ctrl-C after the first message.</span></a></code></pre></div>
 <p>Expected behavior: states progress through <code>HOLD_CURRENT</code>, <code>MOVE_TO_NEUTRAL</code>, and <code>NEUTRAL_HOLD</code>.</p>
 <h3 id="exercise-e-stop-and-reset">4. Exercise E-stop and reset</h3>
 <div class="sourceCode" id="cb9"><pre class="sourceCode bash"><code class="sourceCode bash"><a class="sourceLine" id="cb9-1" title="1"><span class="ex">ros2</span> service call /ws_control/estop std_srvs/srv/Trigger <span class="st">&quot;{}&quot;</span></a>
-<a class="sourceLine" id="cb9-2" title="2"><span class="ex">ros2</span> topic echo --once /ws_control/status</a>
-<a class="sourceLine" id="cb9-3" title="3"><span class="ex">ros2</span> topic echo --once /ws_control/applied_command</a>
-<a class="sourceLine" id="cb9-4" title="4"><span class="ex">ros2</span> service call /ws_control/arm std_srvs/srv/Trigger <span class="st">&quot;{}&quot;</span></a>
-<a class="sourceLine" id="cb9-5" title="5"><span class="ex">ros2</span> service call /ws_control/reset_estop std_srvs/srv/Trigger <span class="st">&quot;{}&quot;</span></a>
-<a class="sourceLine" id="cb9-6" title="6"><span class="ex">ros2</span> topic echo --once /ws_control/status</a></code></pre></div>
+<a class="sourceLine" id="cb9-2" title="2"><span class="ex">ros2</span> topic echo /ws_control/status</a>
+<a class="sourceLine" id="cb9-3" title="3"><span class="co"># Press Ctrl-C after the first message.</span></a>
+<a class="sourceLine" id="cb9-4" title="4"><span class="ex">ros2</span> topic echo /ws_control/applied_command</a>
+<a class="sourceLine" id="cb9-5" title="5"><span class="co"># Press Ctrl-C after the first message.</span></a>
+<a class="sourceLine" id="cb9-6" title="6"><span class="ex">ros2</span> service call /ws_control/arm std_srvs/srv/Trigger <span class="st">&quot;{}&quot;</span></a>
+<a class="sourceLine" id="cb9-7" title="7"><span class="ex">ros2</span> service call /ws_control/reset_estop std_srvs/srv/Trigger <span class="st">&quot;{}&quot;</span></a>
+<a class="sourceLine" id="cb9-8" title="8"><span class="ex">ros2</span> topic echo /ws_control/status</a>
+<a class="sourceLine" id="cb9-9" title="9"><span class="co"># Press Ctrl-C after the first message.</span></a></code></pre></div>
 <p>Expected behavior:</p>
 <ul>
 <li>E-stop becomes latched and status is <code>ESTOP</code>.</li>
@@ -213,7 +230,8 @@ code span.wa { color: #60a0b0; font-weight: bold; font-style: italic; } /* Warni
 <div class="sourceCode" id="cb12"><pre class="sourceCode bash"><code class="sourceCode bash"><a class="sourceLine" id="cb12-1" title="1"><span class="bu">source</span> /home/fengjun/robot/vendor/unitree_ros2/setup.sh</a>
 <a class="sourceLine" id="cb12-2" title="2"><span class="ex">ros2</span> topic info /lowcmd</a>
 <a class="sourceLine" id="cb12-3" title="3"><span class="ex">ros2</span> topic hz /lowstate</a>
-<a class="sourceLine" id="cb12-4" title="4"><span class="ex">ros2</span> topic echo --once /lowstate</a></code></pre></div>
+<a class="sourceLine" id="cb12-4" title="4"><span class="ex">ros2</span> topic echo /lowstate</a>
+<a class="sourceLine" id="cb12-5" title="5"><span class="co"># Press Ctrl-C after the first message.</span></a></code></pre></div>
 <p>Expected behavior:</p>
 <ul>
 <li><code>/lowstate</code> arrives near the robot’s high-frequency state rate.</li>
@@ -240,18 +258,21 @@ code span.wa { color: #60a0b0; font-weight: bold; font-style: italic; } /* Warni
 <p>Launch:</p>
 <div class="sourceCode" id="cb14"><pre class="sourceCode bash"><code class="sourceCode bash"><a class="sourceLine" id="cb14-1" title="1"><span class="bu">source</span> /home/fengjun/robot/vendor/unitree_ros2/setup.sh</a>
 <a class="sourceLine" id="cb14-2" title="2"><span class="bu">cd</span> /home/fengjun/robot/ws_control</a>
-<a class="sourceLine" id="cb14-3" title="3"><span class="bu">source</span> install/setup.bash</a>
+<a class="sourceLine" id="cb14-3" title="3"><span class="bu">source</span> install/setup.zsh</a>
 <a class="sourceLine" id="cb14-4" title="4"><span class="ex">ros2</span> launch go2_nn_control control.launch.py \</a>
 <a class="sourceLine" id="cb14-5" title="5">  config:=/absolute/path/to/reviewed_experiment.yaml \</a>
 <a class="sourceLine" id="cb14-6" title="6">  hardware_mode:=true \</a>
 <a class="sourceLine" id="cb14-7" title="7">  ownership_ack:=SPORT_MODE_DISABLED \</a>
 <a class="sourceLine" id="cb14-8" title="8">  keyboard:=false</a></code></pre></div>
 <p>In another configured terminal:</p>
-<div class="sourceCode" id="cb15"><pre class="sourceCode bash"><code class="sourceCode bash"><a class="sourceLine" id="cb15-1" title="1"><span class="ex">ros2</span> topic echo --once /ws_control/status</a>
-<a class="sourceLine" id="cb15-2" title="2"><span class="ex">ros2</span> topic echo --once /ws_control/applied_command</a>
-<a class="sourceLine" id="cb15-3" title="3"><span class="ex">ros2</span> service call /ws_control/estop std_srvs/srv/Trigger <span class="st">&quot;{}&quot;</span></a>
-<a class="sourceLine" id="cb15-4" title="4"><span class="ex">ros2</span> topic echo --once /ws_control/applied_command</a>
-<a class="sourceLine" id="cb15-5" title="5"><span class="ex">ros2</span> service call /ws_control/reset_estop std_srvs/srv/Trigger <span class="st">&quot;{}&quot;</span></a></code></pre></div>
+<div class="sourceCode" id="cb15"><pre class="sourceCode bash"><code class="sourceCode bash"><a class="sourceLine" id="cb15-1" title="1"><span class="ex">ros2</span> topic echo /ws_control/status</a>
+<a class="sourceLine" id="cb15-2" title="2"><span class="co"># Press Ctrl-C after the first message.</span></a>
+<a class="sourceLine" id="cb15-3" title="3"><span class="ex">ros2</span> topic echo /ws_control/applied_command</a>
+<a class="sourceLine" id="cb15-4" title="4"><span class="co"># Press Ctrl-C after the first message.</span></a>
+<a class="sourceLine" id="cb15-5" title="5"><span class="ex">ros2</span> service call /ws_control/estop std_srvs/srv/Trigger <span class="st">&quot;{}&quot;</span></a>
+<a class="sourceLine" id="cb15-6" title="6"><span class="ex">ros2</span> topic echo /ws_control/applied_command</a>
+<a class="sourceLine" id="cb15-7" title="7"><span class="co"># Press Ctrl-C after the first message.</span></a>
+<a class="sourceLine" id="cb15-8" title="8"><span class="ex">ros2</span> service call /ws_control/reset_estop std_srvs/srv/Trigger <span class="st">&quot;{}&quot;</span></a></code></pre></div>
 <p>Expected behavior: status begins in <code>PASSIVE</code>; every motor mode is passive; Kp, Kd, and torque remain zero before, during, and after E-stop/reset.</p>
 <p>Immediately use the physical cutoff and stop the launch if any actuator produces torque or unexpected motion.</p>
 <h2 id="level-4-suspended-ready-and-neutral-transitions">Level 4: Suspended ready and neutral transitions</h2>
@@ -280,12 +301,15 @@ code span.wa { color: #60a0b0; font-weight: bold; font-style: italic; } /* Warni
 <p>Start the hardware launch, then:</p>
 <div class="sourceCode" id="cb19"><pre class="sourceCode bash"><code class="sourceCode bash"><a class="sourceLine" id="cb19-1" title="1"><span class="ex">ros2</span> service call /ws_control/arm std_srvs/srv/Trigger <span class="st">&quot;{}&quot;</span></a>
 <a class="sourceLine" id="cb19-2" title="2"><span class="co"># Wait for READY_HOLD and inspect the robot.</span></a>
-<a class="sourceLine" id="cb19-3" title="3"><span class="ex">ros2</span> topic echo --once /ws_control/status</a>
-<a class="sourceLine" id="cb19-4" title="4"><span class="ex">ros2</span> service call /ws_control/start_policy std_srvs/srv/Trigger <span class="st">&quot;{}&quot;</span></a>
-<a class="sourceLine" id="cb19-5" title="5"><span class="ex">ros2</span> topic echo --once /ws_control/observation</a>
-<a class="sourceLine" id="cb19-6" title="6"><span class="ex">ros2</span> topic echo --once /ws_control/policy_action</a>
-<a class="sourceLine" id="cb19-7" title="7"><span class="ex">ros2</span> service call /ws_control/stop_policy std_srvs/srv/Trigger <span class="st">&quot;{}&quot;</span></a>
-<a class="sourceLine" id="cb19-8" title="8"><span class="ex">ros2</span> service call /ws_control/recover std_srvs/srv/Trigger <span class="st">&quot;{}&quot;</span></a></code></pre></div>
+<a class="sourceLine" id="cb19-3" title="3"><span class="ex">ros2</span> topic echo /ws_control/status</a>
+<a class="sourceLine" id="cb19-4" title="4"><span class="co"># Press Ctrl-C after the first message.</span></a>
+<a class="sourceLine" id="cb19-5" title="5"><span class="ex">ros2</span> service call /ws_control/start_policy std_srvs/srv/Trigger <span class="st">&quot;{}&quot;</span></a>
+<a class="sourceLine" id="cb19-6" title="6"><span class="ex">ros2</span> topic echo /ws_control/observation</a>
+<a class="sourceLine" id="cb19-7" title="7"><span class="co"># Press Ctrl-C after the first message.</span></a>
+<a class="sourceLine" id="cb19-8" title="8"><span class="ex">ros2</span> topic echo /ws_control/policy_action</a>
+<a class="sourceLine" id="cb19-9" title="9"><span class="co"># Press Ctrl-C after the first message.</span></a>
+<a class="sourceLine" id="cb19-10" title="10"><span class="ex">ros2</span> service call /ws_control/stop_policy std_srvs/srv/Trigger <span class="st">&quot;{}&quot;</span></a>
+<a class="sourceLine" id="cb19-11" title="11"><span class="ex">ros2</span> service call /ws_control/recover std_srvs/srv/Trigger <span class="st">&quot;{}&quot;</span></a></code></pre></div>
 <p>Expected behavior:</p>
 <ul>
 <li>The first policy observation has a relative quaternion close to identity and phase close to <code>[1, 0]</code>.</li>
@@ -301,7 +325,7 @@ code span.wa { color: #60a0b0; font-weight: bold; font-style: italic; } /* Warni
 <div class="sourceCode" id="cb20"><pre class="sourceCode bash"><code class="sourceCode bash"><a class="sourceLine" id="cb20-1" title="1"><span class="bu">cd</span> /home/fengjun/robot/ws_control</a>
 <a class="sourceLine" id="cb20-2" title="2"><span class="bu">source</span> /home/fengjun/robot/vendor/unitree_ros2/setup_local.sh</a>
 <a class="sourceLine" id="cb20-3" title="3"><span class="ex">colcon</span> build --symlink-install --packages-select go2_nn_control</a>
-<a class="sourceLine" id="cb20-4" title="4"><span class="bu">source</span> install/setup.bash</a>
+<a class="sourceLine" id="cb20-4" title="4"><span class="bu">source</span> install/setup.zsh</a>
 <a class="sourceLine" id="cb20-5" title="5"><span class="ex">colcon</span> test --packages-select go2_nn_control</a>
 <a class="sourceLine" id="cb20-6" title="6"><span class="ex">colcon</span> test-result --verbose</a></code></pre></div>
 <p>Before a ground run:</p>
