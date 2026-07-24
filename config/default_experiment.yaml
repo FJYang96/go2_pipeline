@@ -1,0 +1,82 @@
+# Copy this file for each experiment. Hardware mode refuses to start while
+# hardware_profile_complete is false. Values below are pipeline-test defaults,
+# not certified Go2 hardware limits or gains.
+safety_supervisor:
+  ros__parameters:
+    hardware_mode: false
+    hardware_profile_complete: false
+    ownership_acknowledged: false
+
+    command_rate_hz: 500.0
+    policy_rate_hz: 250.0
+    phase_period_seconds: 1.0
+    low_state_timeout_seconds: 0.020
+    policy_timeout_seconds: 0.020
+
+    ready_transition_seconds: 2.0
+    neutral_transition_seconds: 3.0
+    transition_timeout_seconds: 8.0
+    position_tolerance: 0.10
+    velocity_tolerance: 0.50
+
+    quaternion_min_norm: 0.90
+    quaternion_max_norm: 1.10
+    shutdown_passive_seconds: 0.25
+
+    # Native Unitree motor order: FR, FL, RR, RL, three joints per leg.
+    kp: [20.0, 20.0, 20.0, 20.0, 20.0, 20.0,
+         20.0, 20.0, 20.0, 20.0, 20.0, 20.0]
+    kd: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0,
+         1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+
+    # Synthetic zero-pose values for local pipeline tests only.
+    ready_position: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                     0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    neutral_position: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                       0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    joint_position_min: [-3.0, -3.0, -3.0, -3.0, -3.0, -3.0,
+                         -3.0, -3.0, -3.0, -3.0, -3.0, -3.0]
+    joint_position_max: [3.0, 3.0, 3.0, 3.0, 3.0, 3.0,
+                         3.0, 3.0, 3.0, 3.0, 3.0, 3.0]
+    desired_velocity_limit: [5.0, 5.0, 5.0, 5.0, 5.0, 5.0,
+                             5.0, 5.0, 5.0, 5.0, 5.0, 5.0]
+    target_rate_limit: [2.0, 2.0, 2.0, 2.0, 2.0, 2.0,
+                        2.0, 2.0, 2.0, 2.0, 2.0, 2.0]
+    # Optional feedforward path exists, but torque is disabled by default.
+    feedforward_torque_limit: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                               0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+
+    # Deliberately isolated. A reviewed hardware profile must change these to
+    # /lowstate and /lowcmd.
+    low_state_topic: /ws_control/test_lowstate
+    low_command_topic: /ws_control/test_lowcmd
+    observation_topic: /ws_control/observation
+    policy_action_topic: /ws_control/policy_action
+    applied_command_topic: /ws_control/applied_command
+    status_topic: /ws_control/status
+    estop_topic: /ws_control/estop_request
+    qos_depth: 1
+
+policy_runner:
+  ros__parameters:
+    observation_topic: /ws_control/observation
+    policy_action_topic: /ws_control/policy_action
+    qos_depth: 1
+
+keyboard_control:
+  ros__parameters: {}
+
+logging:
+  enabled: true
+  output_directory: ./bags
+  storage: sqlite3
+  topics:
+    - /ws_control/test_lowstate
+    - /ws_control/test_lowcmd
+    - /ws_control/observation
+    - /ws_control/policy_action
+    - /ws_control/applied_command
+    - /ws_control/status
+    - /diagnostics
+    - /parameter_events
+    - /rosout

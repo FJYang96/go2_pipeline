@@ -1,0 +1,7 @@
+std_msgs/Header header
+uint64 sequence
+float64[12] joint_position
+float64[12] joint_velocity
+float64[4] relative_quaternion_wxyz
+float64[3] body_angular_velocity
+float64[2] phase_cos_sin

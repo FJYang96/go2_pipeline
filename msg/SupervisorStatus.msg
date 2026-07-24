@@ -1,0 +1,11 @@
+std_msgs/Header header
+string state
+bool hardware_mode
+bool ownership_acknowledged
+bool low_state_healthy
+bool policy_healthy
+bool estop_latched
+string fault_code
+string fault_message
+float64 low_state_age_ms
+float64 policy_age_ms
