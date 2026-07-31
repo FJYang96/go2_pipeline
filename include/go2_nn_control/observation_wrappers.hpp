@@ -25,4 +25,7 @@ std::array<double, kObservationSize> gather_policy_observation_33(
 std::array<double, kJointCount> reorder_unitree_to_policy(
     const std::array<double, kJointCount> &unitree_values);
 
+std::array<double, kJointCount> reorder_policy_to_unitree(
+    const std::array<double, kJointCount> &policy_values);
+
 }  // namespace go2_nn_control

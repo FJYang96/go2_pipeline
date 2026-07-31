@@ -74,4 +74,28 @@ TEST(ObservationWrapper, ReordersAndFlattensExactly) {
   EXPECT_DOUBLE_EQ(result[32], -0.75);  // sin
 }
 
+TEST(JointOrder, PolicyToUnitreeIsInverseOfUnitreeToPolicy) {
+  std::array<double, 12> unitree{};
+  for (std::size_t i = 0; i < unitree.size(); ++i) {
+    unitree[i] = 10.0 + static_cast<double>(i);
+  }
+  const auto policy = go2_nn_control::reorder_unitree_to_policy(unitree);
+  const auto round_trip = go2_nn_control::reorder_policy_to_unitree(policy);
+  for (std::size_t i = 0; i < unitree.size(); ++i) {
+    EXPECT_DOUBLE_EQ(round_trip[i], unitree[i]);
+  }
+
+  const std::array<double, 12> expected_policy{
+      {13, 14, 15, 10, 11, 12, 19, 20, 21, 16, 17, 18}};
+  for (std::size_t i = 0; i < expected_policy.size(); ++i) {
+    EXPECT_DOUBLE_EQ(policy[i], expected_policy[i]);
+  }
+
+  const auto back_to_policy =
+      go2_nn_control::reorder_unitree_to_policy(round_trip);
+  for (std::size_t i = 0; i < policy.size(); ++i) {
+    EXPECT_DOUBLE_EQ(back_to_policy[i], policy[i]);
+  }
+}
+
 }  // namespace

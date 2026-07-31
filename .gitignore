@@ -1,2 +1,41 @@
-*.pyc
-*/__pycache__
+# Local / generated artifacts
+test/fixtures/
+**/__pycache__/
+*.py[cod]
+*.so
+*.dylib
+*.o
+*.a
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*~
+
+# Local policy packages / binary assets (keep out of git)
+*.onnx
+*.npy
+*.npz
+*.pt
+*.pth
+
+# Generated integrity files next to local packages
+MANIFEST.sha256
+
+# Colcon / CMake if someone builds inside the package tree
+build/
+install/
+log/
+cmake-build-*/
+CMakeCache.txt
+CMakeFiles/
+compile_commands.json
+
+# Test / coverage leftovers
+*.gcda
+*.gcno
+*.gcov
+Testing/
+test_results/

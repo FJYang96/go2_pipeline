@@ -17,6 +17,8 @@ find_package(rosidl_default_generators REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(std_srvs REQUIRED)
 find_package(unitree_go REQUIRED)
+find_package(OpenSSL REQUIRED)
+find_package(yaml-cpp REQUIRED)
 
 rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/PolicyObservation.msg"
@@ -35,6 +37,21 @@ target_include_directories(go2_control_core PUBLIC
   $<INSTALL_INTERFACE:include>)
 ament_target_dependencies(go2_control_core rclcpp unitree_go)
 
+add_library(go2_policy_runtime
+  src/policy/npy_array.cpp
+  src/policy/policy_manifest.cpp
+  src/policy/reference_trajectory.cpp
+)
+target_include_directories(go2_policy_runtime PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>)
+target_link_libraries(go2_policy_runtime
+  PUBLIC go2_control_core
+  PRIVATE yaml-cpp OpenSSL::Crypto)
+
+add_executable(inspect_policy_package src/policy/inspect_policy_package_main.cpp)
+target_link_libraries(inspect_policy_package go2_policy_runtime)
+
 add_executable(policy_runner src/policy_runner.cpp)
 target_include_directories(policy_runner PRIVATE include)
 ament_target_dependencies(policy_runner rclcpp)
@@ -50,7 +67,13 @@ rosidl_target_interfaces(safety_supervisor ${PROJECT_NAME} "rosidl_typesupport_c
 add_executable(keyboard_control src/keyboard_control.cpp)
 ament_target_dependencies(keyboard_control rclcpp std_srvs)
 
-install(TARGETS go2_control_core policy_runner safety_supervisor keyboard_control
+install(TARGETS
+  go2_control_core
+  go2_policy_runtime
+  inspect_policy_package
+  policy_runner
+  safety_supervisor
+  keyboard_control
   ARCHIVE DESTINATION lib
   LIBRARY DESTINATION lib
   RUNTIME DESTINATION lib/${PROJECT_NAME})
@@ -62,6 +85,25 @@ install(FILES README.md TESTING.md DESTINATION share/${PROJECT_NAME})
 if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
   find_package(ament_cmake_pytest REQUIRED)
+  find_program(GO2_PYTHON3 NAMES python3 REQUIRED)
+
+  set(GO2_POLICY_TEST_FIXTURES_DIR
+      "${CMAKE_CURRENT_BINARY_DIR}/policy_test_fixtures")
+  add_custom_command(
+    OUTPUT
+      "${GO2_POLICY_TEST_FIXTURES_DIR}/valid_package/MANIFEST.sha256"
+      "${GO2_POLICY_TEST_FIXTURES_DIR}/valid_package_f32/MANIFEST.sha256"
+    COMMAND "${GO2_PYTHON3}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/test/scripts/generate_policy_fixtures.py"
+            "--output" "${GO2_POLICY_TEST_FIXTURES_DIR}"
+    DEPENDS
+      "${CMAKE_CURRENT_SOURCE_DIR}/test/scripts/generate_policy_fixtures.py"
+    COMMENT "Generating policy package test fixtures"
+    VERBATIM)
+  add_custom_target(go2_policy_test_fixtures DEPENDS
+    "${GO2_POLICY_TEST_FIXTURES_DIR}/valid_package/MANIFEST.sha256"
+    "${GO2_POLICY_TEST_FIXTURES_DIR}/valid_package_f32/MANIFEST.sha256")
+
   ament_add_gtest(test_observation_wrappers test/test_observation_wrappers.cpp)
   if(TARGET test_observation_wrappers)
     target_include_directories(test_observation_wrappers PRIVATE include)
@@ -73,10 +115,26 @@ if(BUILD_TESTING)
     ament_target_dependencies(test_unitree_crc unitree_go)
     target_link_libraries(test_unitree_crc go2_control_core)
   endif()
+  ament_add_gtest(test_policy_manifest test/test_policy_manifest.cpp)
+  if(TARGET test_policy_manifest)
+    target_include_directories(test_policy_manifest PRIVATE include test)
+    target_link_libraries(test_policy_manifest go2_policy_runtime OpenSSL::Crypto)
+    target_compile_definitions(test_policy_manifest PRIVATE
+      GO2_POLICY_TEST_FIXTURES_DIR="${GO2_POLICY_TEST_FIXTURES_DIR}")
+    add_dependencies(test_policy_manifest go2_policy_test_fixtures)
+  endif()
+  ament_add_gtest(test_reference_trajectory test/test_reference_trajectory.cpp)
+  if(TARGET test_reference_trajectory)
+    target_include_directories(test_reference_trajectory PRIVATE include test)
+    target_link_libraries(test_reference_trajectory go2_policy_runtime OpenSSL::Crypto)
+    target_compile_definitions(test_reference_trajectory PRIVATE
+      GO2_POLICY_TEST_FIXTURES_DIR="${GO2_POLICY_TEST_FIXTURES_DIR}")
+    add_dependencies(test_reference_trajectory go2_policy_test_fixtures)
+  endif()
   ament_add_pytest_test(test_config_schema test/test_config_schema.py)
 endif()
 
 ament_export_include_directories(include)
-ament_export_libraries(go2_control_core)
+ament_export_libraries(go2_control_core go2_policy_runtime)
 ament_export_dependencies(rosidl_default_runtime)
 ament_package()

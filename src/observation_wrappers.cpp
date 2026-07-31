@@ -63,6 +63,18 @@ std::array<double, kJointCount> reorder_unitree_to_policy(
   return result;
 }
 
+std::array<double, kJointCount> reorder_policy_to_unitree(
+    const std::array<double, kJointCount> &policy_values) {
+  // Policy: FL, FR, RL, RR. Unitree: FR, FL, RR, RL.
+  constexpr std::array<std::size_t, kJointCount> permutation{
+      {3, 4, 5, 0, 1, 2, 9, 10, 11, 6, 7, 8}};
+  std::array<double, kJointCount> result{};
+  for (std::size_t i = 0; i < result.size(); ++i) {
+    result[permutation[i]] = policy_values[i];
+  }
+  return result;
+}
+
 std::array<double, kObservationSize> gather_policy_observation_33(
     const QuaternionWxyz &relative_quaternion_wxyz,
     const std::array<double, kJointCount> &unitree_joint_position,
