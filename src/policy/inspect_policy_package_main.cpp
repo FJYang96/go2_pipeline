@@ -5,8 +5,10 @@
 #include <stdexcept>
 #include <string>
 
+#include "go2_nn_control/policy/parity_confirmation.hpp"
 #include "go2_nn_control/policy/policy_manifest.hpp"
 #include "go2_nn_control/policy/reference_trajectory.hpp"
+#include "go2_nn_control/policy/residual_policy_runtime.hpp"
 
 namespace {
 
@@ -22,23 +24,45 @@ void print_joint_array(const char *label,
   std::cout << "]\n";
 }
 
-void print_sample(const char *label, const go2_nn_control::ReferenceSample &sample) {
+void print_sample(const char *label,
+                  const go2_nn_control::ReferenceSample &sample) {
   std::cout << label << "\n";
   print_joint_array("q", sample.position);
   print_joint_array("qd", sample.velocity);
   print_joint_array("tau_ff", sample.feedforward_torque);
 }
 
+void print_usage() {
+  std::cerr << "Usage: inspect_policy_package <policy_dir> [--parity]\n";
+}
+
 }  // namespace
 
 int main(int argc, char **argv) {
-  if (argc != 2) {
-    std::cerr << "Usage: inspect_policy_package <policy_dir>\n";
+  if (argc < 2 || argc > 3) {
+    print_usage();
+    return 2;
+  }
+
+  bool run_parity = false;
+  std::filesystem::path policy_dir;
+  for (int i = 1; i < argc; ++i) {
+    const std::string arg = argv[i];
+    if (arg == "--parity") {
+      run_parity = true;
+    } else if (arg.rfind("-", 0) == 0) {
+      print_usage();
+      return 2;
+    } else {
+      policy_dir = arg;
+    }
+  }
+  if (policy_dir.empty()) {
+    print_usage();
     return 2;
   }
 
   try {
-    const std::filesystem::path policy_dir(argv[1]);
     const auto manifest = go2_nn_control::PolicyManifest::Load(policy_dir);
     const auto reference = go2_nn_control::ReferenceTrajectory::Load(manifest);
 
@@ -70,7 +94,23 @@ int main(int argc, char **argv) {
     }
     if (reference.size() > 0) {
       print_sample("first_reference_sample", reference.at(0));
-      print_sample("last_reference_sample", reference.at(reference.size() - 1));
+      print_sample("last_reference_sample",
+                   reference.at(reference.size() - 1));
+    }
+
+    if (run_parity) {
+      if (!std::filesystem::is_regular_file(manifest.parity_npz_path())) {
+        throw std::runtime_error("parity.npz is missing (required by --parity)");
+      }
+      go2_nn_control::ResidualPolicyRuntime runtime(policy_dir);
+      const auto summary = go2_nn_control::confirm_policy_parity(runtime);
+      std::cout << "Parity confirmation OK\n";
+      std::cout << "parity_samples: " << summary.num_samples << "\n";
+      std::cout << "max_action_abs_error: " << summary.max_action_abs_error
+                << "\n";
+      std::cout << "max_q_abs_error: " << summary.max_q_abs_error << "\n";
+      std::cout << "max_qd_abs_error: " << summary.max_qd_abs_error << "\n";
+      std::cout << "max_tau_abs_error: " << summary.max_tau_abs_error << "\n";
     }
     return 0;
   } catch (const std::exception &error) {

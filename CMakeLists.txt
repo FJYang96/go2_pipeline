@@ -19,6 +19,24 @@ find_package(std_srvs REQUIRED)
 find_package(unitree_go REQUIRED)
 find_package(OpenSSL REQUIRED)
 find_package(yaml-cpp REQUIRED)
+find_package(ZLIB REQUIRED)
+
+if(NOT ONNXRUNTIME_ROOT AND DEFINED ENV{ONNXRUNTIME_ROOT})
+  set(ONNXRUNTIME_ROOT $ENV{ONNXRUNTIME_ROOT})
+endif()
+if(NOT ONNXRUNTIME_ROOT)
+  set(ONNXRUNTIME_ROOT /opt/onnxruntime)
+endif()
+find_path(ONNXRUNTIME_INCLUDE_DIR
+  NAMES onnxruntime_cxx_api.h
+  HINTS "${ONNXRUNTIME_ROOT}/include"
+  REQUIRED)
+find_library(ONNXRUNTIME_LIBRARY
+  NAMES onnxruntime
+  HINTS "${ONNXRUNTIME_ROOT}/lib"
+  REQUIRED)
+message(STATUS "ONNX Runtime include: ${ONNXRUNTIME_INCLUDE_DIR}")
+message(STATUS "ONNX Runtime library: ${ONNXRUNTIME_LIBRARY}")
 
 rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/PolicyObservation.msg"
@@ -41,13 +59,17 @@ add_library(go2_policy_runtime
   src/policy/npy_array.cpp
   src/policy/policy_manifest.cpp
   src/policy/reference_trajectory.cpp
+  src/policy/onnx_policy.cpp
+  src/policy/residual_policy_runtime.cpp
+  src/policy/parity_confirmation.cpp
 )
 target_include_directories(go2_policy_runtime PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-  $<INSTALL_INTERFACE:include>)
+  $<INSTALL_INTERFACE:include>
+  ${ONNXRUNTIME_INCLUDE_DIR})
 target_link_libraries(go2_policy_runtime
   PUBLIC go2_control_core
-  PRIVATE yaml-cpp OpenSSL::Crypto)
+  PRIVATE yaml-cpp OpenSSL::Crypto ZLIB::ZLIB ${ONNXRUNTIME_LIBRARY})
 
 add_executable(inspect_policy_package src/policy/inspect_policy_package_main.cpp)
 target_link_libraries(inspect_policy_package go2_policy_runtime)
@@ -130,6 +152,15 @@ if(BUILD_TESTING)
     target_compile_definitions(test_reference_trajectory PRIVATE
       GO2_POLICY_TEST_FIXTURES_DIR="${GO2_POLICY_TEST_FIXTURES_DIR}")
     add_dependencies(test_reference_trajectory go2_policy_test_fixtures)
+  endif()
+  ament_add_gtest(test_residual_policy_runtime test/test_residual_policy_runtime.cpp)
+  if(TARGET test_residual_policy_runtime)
+    target_include_directories(test_residual_policy_runtime PRIVATE include test)
+    target_link_libraries(test_residual_policy_runtime go2_policy_runtime)
+    target_compile_definitions(test_residual_policy_runtime PRIVATE
+      GO2_POLICY_TEST_FIXTURES_DIR="${GO2_POLICY_TEST_FIXTURES_DIR}"
+      GO2_HOP_POLICY_DIR="/misc/hop_robustify_20260724_164647")
+    add_dependencies(test_residual_policy_runtime go2_policy_test_fixtures)
   endif()
   ament_add_pytest_test(test_config_schema test/test_config_schema.py)
 endif()

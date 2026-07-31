@@ -349,6 +349,10 @@ std::filesystem::path PolicyManifest::policy_meta_path() const {
   return policy_dir_ / "policy_meta.yaml";
 }
 
+std::filesystem::path PolicyManifest::parity_npz_path() const {
+  return policy_dir_ / "parity.npz";
+}
+
 const char *PolicyManifest::completion_behavior_string() const {
   switch (completion_behavior_) {
     case CompletionBehavior::kHoldCurrent:

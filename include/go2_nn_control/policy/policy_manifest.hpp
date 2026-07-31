@@ -29,6 +29,7 @@ class PolicyManifest {
   std::filesystem::path reference_tau_path() const;
   std::filesystem::path reference_metadata_path() const;
   std::filesystem::path policy_meta_path() const;
+  std::filesystem::path parity_npz_path() const;
 
   double control_dt() const { return control_dt_; }
   std::size_t horizon() const { return horizon_; }
