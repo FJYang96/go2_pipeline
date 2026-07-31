@@ -48,10 +48,10 @@ safety_supervisor:
          5.0, 5.0, 5.0,
          5.0, 5.0, 5.0]
 
-    ready_position: [0.0, 0.67, -1.3,
-                     0.0, 0.67, -1.3,
-                     0.0, 0.67, -1.3,
-                     0.0, 0.67, -1.3]
+    ready_position: [0.0, 1.0, -2.1,
+                     0.0, 1.0, -2.1,
+                     0.0, 1.0, -2.1,
+                     0.0, 1.0, -2.1]
 
     neutral_position: [0.0, 0.67, -1.3,
                        0.0, 0.67, -1.3,
@@ -104,9 +104,6 @@ policy_runner:
     observation_topic: /ws_control/observation
     policy_action_topic: /ws_control/policy_action
     qos_depth: 1
-
-keyboard_control:
-  ros__parameters: {}
 
 logging:
   enabled: true

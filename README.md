@@ -12,7 +12,7 @@ source /home/fengjun/robot/vendor/unitree_ros2/setup_local.sh
 cd /home/fengjun/robot/ws_control
 colcon build --symlink-install
 source install/setup.bash
-ros2 launch go2_nn_control control.launch.py keyboard:=true
+ros2 launch go2_nn_control control.launch.py
 ```
 
 The default experiment profile is deliberately local-only and uses
@@ -47,8 +47,15 @@ an operator assertion, not proof.
 | `e` or Space | `/ws_control/estop` | Latch passive zero-torque mode |
 | `x` | `/ws_control/reset_estop` | Reset only with healthy state |
 
-ROS service calls are preferred if launch does not provide usable terminal
-input. The Boolean `/ws_control/estop_request` topic is another E-stop input.
+The launch file does not start the keyboard node because ROS 2 launch does not
+reliably forward terminal input to child nodes. Run it in a separate configured
+terminal:
+
+```bash
+ros2 run go2_nn_control keyboard_control
+```
+
+The Boolean `/ws_control/estop_request` topic is another E-stop input.
 
 ## Observation conventions
 

@@ -69,7 +69,7 @@ Terminal 1:
 cd /home/fengjun/robot/ws_control
 source /home/fengjun/robot/vendor/unitree_ros2/setup_local.sh
 source install/setup.zsh
-ros2 launch go2_nn_control control.launch.py keyboard:=false
+ros2 launch go2_nn_control control.launch.py
 ```
 
 Expected behavior:
@@ -313,8 +313,7 @@ source install/setup.zsh
 ros2 launch go2_nn_control control.launch.py \
   config:=/absolute/path/to/reviewed_experiment.yaml \
   hardware_mode:=true \
-  ownership_ack:=SPORT_MODE_DISABLED \
-  keyboard:=false
+  ownership_ack:=SPORT_MODE_DISABLED
 ```
 
 In another configured terminal:

@@ -67,9 +67,6 @@ policy_runner:
     policy_action_topic: /ws_control/policy_action
     qos_depth: 1
 
-keyboard_control:
-  ros__parameters: {}
-
 logging:
   enabled: true
   output_directory: ./bags

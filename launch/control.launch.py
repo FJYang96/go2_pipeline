@@ -19,7 +19,6 @@ def _launch(context):
     config_path = Path(LaunchConfiguration("config").perform(context)).resolve()
     hardware_mode = LaunchConfiguration("hardware_mode").perform(context).lower() == "true"
     ownership = LaunchConfiguration("ownership_ack").perform(context)
-    keyboard = LaunchConfiguration("keyboard").perform(context).lower() == "true"
 
     with config_path.open("r", encoding="utf-8") as stream:
         config = yaml.safe_load(stream)
@@ -44,17 +43,6 @@ def _launch(context):
             parameters=[policy_params],
         ),
     ]
-    if keyboard:
-        actions.append(
-            Node(
-                package="go2_nn_control",
-                executable="keyboard_control",
-                name="keyboard_control",
-                output="screen",
-                emulate_tty=True,
-                parameters=[config.get("keyboard_control", {}).get("ros__parameters", {})],
-            )
-        )
 
     logging = config["logging"]
     if logging["enabled"]:
@@ -93,7 +81,6 @@ def generate_launch_description():
             DeclareLaunchArgument("config", default_value=default_config),
             DeclareLaunchArgument("hardware_mode", default_value="false"),
             DeclareLaunchArgument("ownership_ack", default_value=""),
-            DeclareLaunchArgument("keyboard", default_value="true"),
             OpaqueFunction(function=_launch),
         ]
     )

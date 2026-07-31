@@ -253,12 +253,46 @@ class SafetySupervisor final : public rclcpp::Node {
     }
   }
 
+  void transition_to_locked(ControlState next_state,
+                            const std::string &reason) {
+    if (state_ == next_state) return;
+    const ControlState previous_state = state_;
+    state_ = next_state;
+    RCLCPP_INFO(get_logger(), "State transition: %s -> %s (%s)",
+                state_name(previous_state), state_name(next_state),
+                reason.c_str());
+  }
+
+  void latch_fault_locked(const std::string &code,
+                          const std::string &message) {
+    if (state_ != ControlState::kEstop) {
+      RCLCPP_ERROR(get_logger(), "Latched fault %s: %s", code.c_str(),
+                   message.c_str());
+    }
+    fault_code_ = code;
+    fault_message_ = message;
+    transition_to_locked(ControlState::kEstop, code + ": " + message);
+  }
+
+  void log_service_result_locked(
+      const char *service_name,
+      const std_srvs::srv::Trigger::Response &response) const {
+    if (response.success) {
+      RCLCPP_INFO(get_logger(), "Service %s succeeded in state %s: %s",
+                  service_name, state_name(state_), response.message.c_str());
+    } else {
+      RCLCPP_WARN(get_logger(), "Service %s failed in state %s: %s",
+                  service_name, state_name(state_), response.message.c_str());
+    }
+  }
+
   void create_services() {
     using Trigger = std_srvs::srv::Trigger;
     ownership_service_ = create_service<Trigger>(
         "/ws_control/acknowledge_ownership",
         [this](const std::shared_ptr<Trigger::Request>,
                std::shared_ptr<Trigger::Response> response) {
+          std::lock_guard<std::mutex> lock(mutex_);
           if (hardware_mode_) {
             response->success = ownership_acknowledged_;
             response->message = ownership_acknowledged_
@@ -269,35 +303,56 @@ class SafetySupervisor final : public rclcpp::Node {
             response->success = true;
             response->message = "local-mode ownership acknowledged";
           }
+          log_service_result_locked("/ws_control/acknowledge_ownership",
+                                    *response);
         });
     arm_service_ = create_service<Trigger>(
         "/ws_control/arm",
         [this](const std::shared_ptr<Trigger::Request>,
                std::shared_ptr<Trigger::Response> response) {
           std::lock_guard<std::mutex> lock(mutex_);
-          if (state_ != ControlState::kPassive || !healthy_low_state_locked() ||
-              !ownership_acknowledged_ ||
-              count_publishers(low_command_topic_) > 1U) {
+          if (state_ != ControlState::kPassive) {
+            response->success = false;
+            response->message = "arm requires PASSIVE; current state is " +
+                                std::string(state_name(state_));
+          } else if (!healthy_low_state_locked()) {
+            response->success = false;
+            response->message = "arm requires a healthy lowstate";
+          } else if (!ownership_acknowledged_) {
+            response->success = false;
+            response->message = "arm requires ownership acknowledgment";
+          } else if (count_publishers(low_command_topic_) > 1U) {
             response->success = false;
             response->message =
-                "arm requires PASSIVE, healthy lowstate, ownership acknowledgment, "
-                "and no competing ROS /lowcmd publisher";
-            return;
+                "arm rejected because another ROS publisher is using " +
+                low_command_topic_;
+          } else {
+            capture_measured_positions_locked(transition_start_position_);
+            transition_started_ = SteadyClock::now();
+            transition_to_locked(ControlState::kMoveToReady,
+                                 "/ws_control/arm accepted");
+            response->success = true;
+            response->message = "moving to ready stance";
           }
-          capture_measured_positions_locked(transition_start_position_);
-          transition_started_ = SteadyClock::now();
-          state_ = ControlState::kMoveToReady;
-          response->success = true;
-          response->message = "moving to ready stance";
+          log_service_result_locked("/ws_control/arm", *response);
         });
     start_service_ = create_service<Trigger>(
         "/ws_control/start_policy",
         [this](const std::shared_ptr<Trigger::Request>,
                std::shared_ptr<Trigger::Response> response) {
           std::lock_guard<std::mutex> lock(mutex_);
-          if (state_ != ControlState::kReadyHold || !healthy_low_state_locked()) {
+          if (state_ != ControlState::kReadyHold) {
             response->success = false;
-            response->message = "policy start requires READY_HOLD and healthy state";
+            response->message =
+                "policy start requires READY_HOLD; current state is " +
+                std::string(state_name(state_));
+            log_service_result_locked("/ws_control/start_policy", *response);
+            return;
+          }
+          if (!healthy_low_state_locked()) {
+            response->success = false;
+            response->message = "policy start requires a healthy lowstate";
+            log_service_result_locked("/ws_control/start_policy", *response);
             return;
           }
           try {
@@ -305,13 +360,16 @@ class SafetySupervisor final : public rclcpp::Node {
           } catch (const std::exception &error) {
             response->success = false;
             response->message = error.what();
+            log_service_result_locked("/ws_control/start_policy", *response);
             return;
           }
           policy_started_ = SteadyClock::now();
           have_policy_action_ = false;
-          state_ = ControlState::kPolicy;
+          transition_to_locked(ControlState::kPolicy,
+                               "/ws_control/start_policy accepted");
           response->success = true;
           response->message = "policy started; phase and orientation reset";
+          log_service_result_locked("/ws_control/start_policy", *response);
         });
     stop_service_ = create_service<Trigger>(
         "/ws_control/stop_policy",
@@ -320,13 +378,17 @@ class SafetySupervisor final : public rclcpp::Node {
           std::lock_guard<std::mutex> lock(mutex_);
           if (state_ != ControlState::kPolicy) {
             response->success = false;
-            response->message = "normal stop is only valid in POLICY";
+            response->message = "normal stop requires POLICY; current state is " +
+                                std::string(state_name(state_));
+            log_service_result_locked("/ws_control/stop_policy", *response);
             return;
           }
           capture_measured_positions_locked(hold_position_);
-          state_ = ControlState::kHoldCurrent;
+          transition_to_locked(ControlState::kHoldCurrent,
+                               "/ws_control/stop_policy accepted");
           response->success = true;
           response->message = "holding measured pose";
+          log_service_result_locked("/ws_control/stop_policy", *response);
         });
     recover_service_ = create_service<Trigger>(
         "/ws_control/recover",
@@ -335,38 +397,55 @@ class SafetySupervisor final : public rclcpp::Node {
           std::lock_guard<std::mutex> lock(mutex_);
           if (state_ != ControlState::kHoldCurrent) {
             response->success = false;
-            response->message = "recovery requires HOLD_CURRENT";
+            response->message =
+                "recovery requires HOLD_CURRENT; current state is " +
+                std::string(state_name(state_));
+            log_service_result_locked("/ws_control/recover", *response);
             return;
           }
           capture_measured_positions_locked(transition_start_position_);
           transition_started_ = SteadyClock::now();
-          state_ = ControlState::kMoveToNeutral;
+          transition_to_locked(ControlState::kMoveToNeutral,
+                               "/ws_control/recover accepted");
           response->success = true;
           response->message = "moving to neutral stance";
+          log_service_result_locked("/ws_control/recover", *response);
         });
     estop_service_ = create_service<Trigger>(
         "/ws_control/estop",
         [this](const std::shared_ptr<Trigger::Request>,
                std::shared_ptr<Trigger::Response> response) {
-          latch_fault("MANUAL_ESTOP", "E-stop service called");
+          std::lock_guard<std::mutex> lock(mutex_);
+          latch_fault_locked("MANUAL_ESTOP", "E-stop service called");
           response->success = true;
           response->message = "E-stop latched";
+          log_service_result_locked("/ws_control/estop", *response);
         });
     reset_service_ = create_service<Trigger>(
         "/ws_control/reset_estop",
         [this](const std::shared_ptr<Trigger::Request>,
                std::shared_ptr<Trigger::Response> response) {
           std::lock_guard<std::mutex> lock(mutex_);
-          if (state_ != ControlState::kEstop || !healthy_low_state_locked()) {
+          if (state_ != ControlState::kEstop) {
             response->success = false;
-            response->message = "reset requires ESTOP and healthy lowstate";
+            response->message = "reset requires ESTOP; current state is " +
+                                std::string(state_name(state_));
+            log_service_result_locked("/ws_control/reset_estop", *response);
+            return;
+          }
+          if (!healthy_low_state_locked()) {
+            response->success = false;
+            response->message = "reset requires a healthy lowstate";
+            log_service_result_locked("/ws_control/reset_estop", *response);
             return;
           }
           fault_code_.clear();
           fault_message_.clear();
-          state_ = ControlState::kPassive;
+          transition_to_locked(ControlState::kPassive,
+                               "/ws_control/reset_estop accepted");
           response->success = true;
           response->message = "fault cleared; full arm sequence required";
+          log_service_result_locked("/ws_control/reset_estop", *response);
         });
   }
 
@@ -401,13 +480,7 @@ class SafetySupervisor final : public rclcpp::Node {
 
   void latch_fault(const std::string &code, const std::string &message) {
     std::lock_guard<std::mutex> lock(mutex_);
-    if (state_ != ControlState::kEstop) {
-      RCLCPP_ERROR(get_logger(), "Latched fault %s: %s", code.c_str(),
-                   message.c_str());
-    }
-    fault_code_ = code;
-    fault_message_ = message;
-    state_ = ControlState::kEstop;
+    latch_fault_locked(code, message);
   }
 
   bool validate_policy_locked(std::string &error) const {
@@ -487,9 +560,8 @@ class SafetySupervisor final : public rclcpp::Node {
           std::chrono::duration<double>(SteadyClock::now() - transition_started_)
               .count();
       if (elapsed > transition_timeout_seconds_) {
-        fault_code_ = "TRANSITION_TIMEOUT";
-        fault_message_ = "stance transition exceeded configured timeout";
-        state_ = ControlState::kEstop;
+        latch_fault_locked("TRANSITION_TIMEOUT",
+                           "stance transition exceeded configured timeout");
         set_passive_locked();
         return;
       }
@@ -508,8 +580,9 @@ class SafetySupervisor final : public rclcpp::Node {
               std::abs(low_state_.motor_state[i].dq) <= velocity_tolerance_;
         }
         if (within_tolerance) {
-          state_ = ready ? ControlState::kReadyHold
-                         : ControlState::kNeutralHold;
+          transition_to_locked(
+              ready ? ControlState::kReadyHold : ControlState::kNeutralHold,
+              ready ? "ready stance reached" : "neutral stance reached");
         }
       }
     } else if (state_ == ControlState::kReadyHold) {
@@ -595,9 +668,7 @@ class SafetySupervisor final : public rclcpp::Node {
                 : QuaternionWxyz{{1.0, 0.0, 0.0, 0.0}};
         observation.relative_quaternion_wxyz = relative;
       } catch (const std::exception &error) {
-        fault_code_ = "INVALID_QUATERNION";
-        fault_message_ = error.what();
-        state_ = ControlState::kEstop;
+        latch_fault_locked("INVALID_QUATERNION", error.what());
         return;
       }
       if (state_ == ControlState::kPolicy) {
