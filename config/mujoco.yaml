@@ -1,0 +1,125 @@
+# MuJoCo simulation profile for the Unitree Go2.
+#
+# This profile sends active LowCmd messages to unitree_mujoco. It must not be
+# reused for physical hardware without reviewing all limits and safety settings.
+
+safety_supervisor:
+  ros__parameters:
+    # Keep hardware mode disabled. The simulator does not require the physical
+    # robot ownership acknowledgment.
+    hardware_mode: false
+    hardware_profile_complete: true
+    ownership_acknowledged: false
+
+    # Controller rates
+    command_rate_hz: 500.0
+    policy_rate_hz: 250.0
+    phase_period_seconds: 1.0
+
+    # Watchdogs
+    low_state_timeout_seconds: 0.100
+    policy_timeout_seconds: 0.100
+
+    # Pose-transition behavior
+    ready_transition_seconds: 2.0
+    neutral_transition_seconds: 3.0
+    transition_timeout_seconds: 8.0
+
+    position_tolerance: 0.10
+    velocity_tolerance: 0.50
+
+    # State validation
+    quaternion_min_norm: 0.90
+    quaternion_max_norm: 1.10
+    shutdown_passive_seconds: 0.25
+
+    # Native Unitree motor order:
+    # FR_hip, FR_thigh, FR_calf,
+    # FL_hip, FL_thigh, FL_calf,
+    # RR_hip, RR_thigh, RR_calf,
+    # RL_hip, RL_thigh, RL_calf
+    kp: [60.0, 60.0, 60.0,
+         60.0, 60.0, 60.0,
+         60.0, 60.0, 60.0,
+         60.0, 60.0, 60.0]
+
+    kd: [5.0, 5.0, 5.0,
+         5.0, 5.0, 5.0,
+         5.0, 5.0, 5.0,
+         5.0, 5.0, 5.0]
+
+    ready_position: [0.0, 0.67, -1.3,
+                     0.0, 0.67, -1.3,
+                     0.0, 0.67, -1.3,
+                     0.0, 0.67, -1.3]
+
+    neutral_position: [0.0, 0.67, -1.3,
+                       0.0, 0.67, -1.3,
+                       0.0, 0.67, -1.3,
+                       0.0, 0.67, -1.3]
+
+    # Broad simulator limits inherited from the fake-state profile.
+    # These are not certified physical Go2 limits.
+    joint_position_min: [-3.0, -3.0, -3.0,
+                         -3.0, -3.0, -3.0,
+                         -3.0, -3.0, -3.0,
+                         -3.0, -3.0, -3.0]
+
+    joint_position_max: [3.0, 3.0, 3.0,
+                         3.0, 3.0, 3.0,
+                         3.0, 3.0, 3.0,
+                         3.0, 3.0, 3.0]
+
+    desired_velocity_limit: [5.0, 5.0, 5.0,
+                             5.0, 5.0, 5.0,
+                             5.0, 5.0, 5.0,
+                             5.0, 5.0, 5.0]
+
+    target_rate_limit: [2.0, 2.0, 2.0,
+                        2.0, 2.0, 2.0,
+                        2.0, 2.0, 2.0,
+                        2.0, 2.0, 2.0]
+
+    # Disable feedforward torque initially.
+    feedforward_torque_limit: [0.0, 0.0, 0.0,
+                               0.0, 0.0, 0.0,
+                               0.0, 0.0, 0.0,
+                               0.0, 0.0, 0.0]
+
+    # MuJoCo DDS topics.
+    low_state_topic: /lowstate
+    low_command_topic: /lowcmd
+
+    # Internal pipeline topics.
+    observation_topic: /ws_control/observation
+    policy_action_topic: /ws_control/policy_action
+    applied_command_topic: /ws_control/applied_command
+    status_topic: /ws_control/status
+    estop_topic: /ws_control/estop_request
+
+    qos_depth: 1
+
+policy_runner:
+  ros__parameters:
+    observation_topic: /ws_control/observation
+    policy_action_topic: /ws_control/policy_action
+    qos_depth: 1
+
+keyboard_control:
+  ros__parameters: {}
+
+logging:
+  enabled: true
+  output_directory: /workspace/bags
+  storage: sqlite3
+
+  topics:
+    - /lowstate
+    - /lowcmd
+    - /ws_control/observation
+    - /ws_control/policy_action
+    - /ws_control/applied_command
+    - /ws_control/status
+    - /diagnostics
+    - /parameter_events
+    - /rosout
