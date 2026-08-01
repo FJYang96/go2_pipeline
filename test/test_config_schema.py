@@ -16,8 +16,6 @@ def test_default_experiment_is_complete_and_isolated():
         "hardware_profile_complete",
         "ownership_acknowledged",
         "command_rate_hz",
-        "policy_rate_hz",
-        "phase_period_seconds",
         "low_state_timeout_seconds",
         "policy_timeout_seconds",
         "ready_transition_seconds",
@@ -38,9 +36,13 @@ def test_default_experiment_is_complete_and_isolated():
         "qos_depth",
     }
     assert required_scalars <= params.keys()
+    assert "policy_rate_hz" not in params
+    assert "phase_period_seconds" not in params
+    assert "kp" not in params
+    assert "kd" not in params
     for name in (
-        "kp",
-        "kd",
+        "transition_kp",
+        "transition_kd",
         "ready_position",
         "neutral_position",
         "joint_position_min",

@@ -8,8 +8,6 @@ safety_supervisor:
     ownership_acknowledged: false
 
     command_rate_hz: 500.0
-    policy_rate_hz: 250.0
-    phase_period_seconds: 1.0
     # Desktop-safe defaults for the CLI-driven loopback tests. A reviewed
     # hardware profile must choose watchdogs for its actual control transport
     # and timing guarantees; ordinary non-real-time Linux can occasionally
@@ -28,12 +26,14 @@ safety_supervisor:
     shutdown_passive_seconds: 0.25
 
     # Native Unitree motor order: FR, FL, RR, RL, three joints per leg.
-    kp: [20.0, 20.0, 20.0, 20.0, 20.0, 20.0,
-         20.0, 20.0, 20.0, 20.0, 20.0, 20.0]
-    kd: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0,
-         1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+    # Used for transitions/holds; policy-mode gains come from the policy package.
+    transition_kp: [20.0, 20.0, 20.0, 20.0, 20.0, 20.0,
+                    20.0, 20.0, 20.0, 20.0, 20.0, 20.0]
+    transition_kd: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0,
+                    1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
 
     # Synthetic zero-pose values for local pipeline tests only.
+    # Active ready pose is loaded from the policy package at startup.
     ready_position: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
                      0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
     neutral_position: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0,

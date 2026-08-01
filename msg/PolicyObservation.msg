@@ -5,3 +5,6 @@ float64[12] joint_velocity
 float64[4] relative_quaternion_wxyz
 float64[3] body_angular_velocity
 float64[2] phase_cos_sin
+bool policy_active
+uint64 policy_epoch
+float64 policy_time_seconds

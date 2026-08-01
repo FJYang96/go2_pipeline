@@ -17,6 +17,7 @@
 #include "go2_nn_control/msg/policy_observation.hpp"
 #include "go2_nn_control/msg/supervisor_status.hpp"
 #include "go2_nn_control/observation_wrappers.hpp"
+#include "go2_nn_control/policy/policy_manifest.hpp"
 #include "go2_nn_control/unitree_crc.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "std_msgs/msg/bool.hpp"
@@ -97,6 +98,9 @@ class SafetySupervisor final : public rclcpp::Node {
         policy_action_topic_, qos_depth_,
         [this](msg::PolicyAction::SharedPtr message) {
           std::lock_guard<std::mutex> lock(mutex_);
+          if (message->policy_epoch != policy_epoch_) {
+            return;
+          }
           policy_action_ = *message;
           have_policy_action_ = true;
           last_policy_time_ = SteadyClock::now();
@@ -117,7 +121,10 @@ class SafetySupervisor final : public rclcpp::Node {
         [this] { observation_tick(); });
     status_timer_ = create_wall_timer(std::chrono::milliseconds(100),
                                       [this] { publish_status(); });
-    RCLCPP_INFO(get_logger(), "Safety supervisor initialized in PASSIVE mode");
+    RCLCPP_INFO(get_logger(),
+                "Safety supervisor initialized in PASSIVE mode "
+                "(policy_rate=%.3f Hz, duration=%.3f s)",
+                policy_rate_hz_, duration_s_);
   }
 
   ~SafetySupervisor() override {
@@ -157,6 +164,25 @@ class SafetySupervisor final : public rclcpp::Node {
     return result;
   }
 
+  bool try_get_array_parameter(const std::string &name,
+                               std::array<double, kJointCount> &destination) {
+    rclcpp::Parameter parameter;
+    if (!get_parameter(name, parameter)) {
+      return false;
+    }
+    const auto values = parameter.get_value<std::vector<double>>();
+    if (values.size() != kJointCount) {
+      throw std::runtime_error(name + " must contain exactly 12 values");
+    }
+    std::copy(values.begin(), values.end(), destination.begin());
+    for (const double value : destination) {
+      if (!std::isfinite(value)) {
+        throw std::runtime_error(name + " contains a non-finite value");
+      }
+    }
+    return true;
+  }
+
   void load_configuration() {
     hardware_mode_ = required_parameter<bool>("hardware_mode");
     hardware_profile_complete_ =
@@ -164,8 +190,6 @@ class SafetySupervisor final : public rclcpp::Node {
     ownership_acknowledged_ =
         required_parameter<bool>("ownership_acknowledged");
     command_rate_hz_ = required_parameter<double>("command_rate_hz");
-    policy_rate_hz_ = required_parameter<double>("policy_rate_hz");
-    phase_period_seconds_ = required_parameter<double>("phase_period_seconds");
     low_state_timeout_seconds_ =
         required_parameter<double>("low_state_timeout_seconds");
     policy_timeout_seconds_ =
@@ -183,8 +207,10 @@ class SafetySupervisor final : public rclcpp::Node {
     shutdown_passive_seconds_ =
         required_parameter<double>("shutdown_passive_seconds");
 
-    kp_ = get_array_parameter<double>("kp");
-    kd_ = get_array_parameter<double>("kd");
+    transition_kp_ = get_array_parameter<double>("transition_kp");
+    transition_kd_ = get_array_parameter<double>("transition_kd");
+    // YAML ready_position is retained as a schema fallback; active arming uses
+    // the policy package ready pose loaded below.
     ready_position_ = get_array_parameter<double>("ready_position");
     neutral_position_ = get_array_parameter<double>("neutral_position");
     joint_position_min_ = get_array_parameter<double>("joint_position_min");
@@ -206,6 +232,45 @@ class SafetySupervisor final : public rclcpp::Node {
     estop_topic_ = required_parameter<std::string>("estop_topic");
     qos_depth_ = static_cast<int>(required_parameter<int64_t>("qos_depth"));
 
+    const auto policy_dir = required_parameter<std::string>("policy_dir");
+    if (policy_dir.empty()) {
+      throw std::runtime_error("policy_dir must be a non-empty path");
+    }
+    const auto manifest = PolicyManifest::Load(policy_dir);
+    if (manifest.completion_behavior() !=
+        CompletionBehavior::kMoveToNeutral) {
+      throw std::runtime_error(
+          "safety supervisor currently requires "
+          "execution.completion_behavior: move_to_neutral");
+    }
+    if (!(manifest.control_dt() > 0.0) ||
+        !(manifest.duration_seconds() > 0.0)) {
+      throw std::runtime_error("policy control_dt and duration_s must be > 0");
+    }
+    policy_rate_hz_ = 1.0 / manifest.control_dt();
+    duration_s_ = manifest.duration_seconds();
+    policy_kp_ = manifest.policy_kp();
+    policy_kd_ = manifest.policy_kd();
+    ready_position_ =
+        reorder_policy_to_unitree(manifest.ready_position_policy());
+
+    std::array<double, kJointCount> policy_kp_max{};
+    std::array<double, kJointCount> policy_kd_max{};
+    const bool have_kp_max =
+        try_get_array_parameter("policy_kp_max", policy_kp_max);
+    const bool have_kd_max =
+        try_get_array_parameter("policy_kd_max", policy_kd_max);
+    for (std::size_t i = 0; i < kJointCount; ++i) {
+      if (have_kp_max && policy_kp_[i] > policy_kp_max[i]) {
+        throw std::runtime_error(
+            "policy kp exceeds policy_kp_max at joint " + std::to_string(i));
+      }
+      if (have_kd_max && policy_kd_[i] > policy_kd_max[i]) {
+        throw std::runtime_error(
+            "policy kd exceeds policy_kd_max at joint " + std::to_string(i));
+      }
+    }
+
     if (hardware_mode_ &&
         (!hardware_profile_complete_ || !ownership_acknowledged_)) {
       throw std::runtime_error(
@@ -218,13 +283,14 @@ class SafetySupervisor final : public rclcpp::Node {
           "hardware mode requires explicit /lowstate and /lowcmd topics");
     }
     if (command_rate_hz_ <= 0.0 || policy_rate_hz_ <= 0.0 ||
-        phase_period_seconds_ <= 0.0 || low_state_timeout_seconds_ <= 0.0 ||
+        duration_s_ <= 0.0 || low_state_timeout_seconds_ <= 0.0 ||
         policy_timeout_seconds_ <= 0.0 || shutdown_passive_seconds_ < 0.0) {
-      throw std::runtime_error("rates, period, and watchdogs must be positive");
+      throw std::runtime_error("rates, duration, and watchdogs must be positive");
     }
     for (std::size_t i = 0; i < kJointCount; ++i) {
       if (joint_position_min_[i] >= joint_position_max_[i] ||
-          kp_[i] < 0.0 || kd_[i] < 0.0 ||
+          transition_kp_[i] < 0.0 || transition_kd_[i] < 0.0 ||
+          policy_kp_[i] < 0.0 || policy_kd_[i] < 0.0 ||
           desired_velocity_limit_[i] < 0.0 ||
           target_rate_limit_[i] <= 0.0 ||
           feedforward_torque_limit_[i] < 0.0 ||
@@ -286,6 +352,13 @@ class SafetySupervisor final : public rclcpp::Node {
     }
   }
 
+  void begin_move_to_neutral_locked(const std::string &reason) {
+    capture_measured_positions_locked(transition_start_position_);
+    transition_started_ = SteadyClock::now();
+    have_policy_action_ = false;
+    transition_to_locked(ControlState::kMoveToNeutral, reason);
+  }
+
   void create_services() {
     using Trigger = std_srvs::srv::Trigger;
     ownership_service_ = create_service<Trigger>(
@@ -315,9 +388,19 @@ class SafetySupervisor final : public rclcpp::Node {
             response->success = false;
             response->message = "arm requires PASSIVE; current state is " +
                                 std::string(state_name(state_));
+            if (state_ == ControlState::kMoveToReady) {
+              response->message +=
+                  " (ready transition still in progress; wait for READY_HOLD "
+                  "or ESTOP)";
+            } else if (state_ == ControlState::kEstop) {
+              response->message += " (call /ws_control/reset_estop first)";
+            }
           } else if (!healthy_low_state_locked()) {
             response->success = false;
-            response->message = "arm requires a healthy lowstate";
+            response->message =
+                have_low_state_
+                    ? "arm requires a healthy lowstate (stale /lowstate)"
+                    : "arm requires a healthy lowstate (no /lowstate yet)";
           } else if (!ownership_acknowledged_) {
             response->success = false;
             response->message = "arm requires ownership acknowledgment";
@@ -325,7 +408,8 @@ class SafetySupervisor final : public rclcpp::Node {
             response->success = false;
             response->message =
                 "arm rejected because another ROS publisher is using " +
-                low_command_topic_;
+                low_command_topic_ + " (publisher count=" +
+                std::to_string(count_publishers(low_command_topic_)) + ")";
           } else {
             capture_measured_positions_locked(transition_start_position_);
             transition_started_ = SteadyClock::now();
@@ -363,6 +447,7 @@ class SafetySupervisor final : public rclcpp::Node {
             log_service_result_locked("/ws_control/start_policy", *response);
             return;
           }
+          ++policy_epoch_;
           policy_started_ = SteadyClock::now();
           have_policy_action_ = false;
           transition_to_locked(ControlState::kPolicy,
@@ -384,6 +469,7 @@ class SafetySupervisor final : public rclcpp::Node {
             return;
           }
           capture_measured_positions_locked(hold_position_);
+          have_policy_action_ = false;
           transition_to_locked(ControlState::kHoldCurrent,
                                "/ws_control/stop_policy accepted");
           response->success = true;
@@ -403,10 +489,7 @@ class SafetySupervisor final : public rclcpp::Node {
             log_service_result_locked("/ws_control/recover", *response);
             return;
           }
-          capture_measured_positions_locked(transition_start_position_);
-          transition_started_ = SteadyClock::now();
-          transition_to_locked(ControlState::kMoveToNeutral,
-                               "/ws_control/recover accepted");
+          begin_move_to_neutral_locked("/ws_control/recover accepted");
           response->success = true;
           response->message = "moving to neutral stance";
           log_service_result_locked("/ws_control/recover", *response);
@@ -504,18 +587,67 @@ class SafetySupervisor final : public rclcpp::Node {
                              ? policy_action_.feedforward_torque[i]
                              : 0.0;
       if (!std::isfinite(q) || !std::isfinite(dq) || !std::isfinite(tau)) {
-        error = "policy produced a non-finite value";
+        error = "policy produced a non-finite value at joint " +
+                std::to_string(i) + " (q=" + std::to_string(q) +
+                ", dq=" + std::to_string(dq) + ", tau=" + std::to_string(tau) +
+                ")";
         return false;
       }
-      if (q < joint_position_min_[i] || q > joint_position_max_[i] ||
-          std::abs(dq) > desired_velocity_limit_[i] ||
-          std::abs(tau) > feedforward_torque_limit_[i]) {
-        error = "policy action exceeded configured hard limit at joint " +
-                std::to_string(i);
+      if (q < joint_position_min_[i] || q > joint_position_max_[i]) {
+        error = "policy desired_position exceeded joint_position limits at "
+                "joint " +
+                std::to_string(i) + " (q=" + std::to_string(q) + ", min=" +
+                std::to_string(joint_position_min_[i]) + ", max=" +
+                std::to_string(joint_position_max_[i]) +
+                ", ref_index=" + std::to_string(policy_action_.reference_index) +
+                ")";
+        return false;
+      }
+      if (std::abs(dq) > desired_velocity_limit_[i]) {
+        error = "policy desired_velocity exceeded desired_velocity_limit at "
+                "joint " +
+                std::to_string(i) + " (dq=" + std::to_string(dq) + ", limit=" +
+                std::to_string(desired_velocity_limit_[i]) +
+                ", ref_index=" + std::to_string(policy_action_.reference_index) +
+                ")";
+        return false;
+      }
+      if (std::abs(tau) > feedforward_torque_limit_[i]) {
+        error = "policy feedforward_torque exceeded "
+                "feedforward_torque_limit at joint " +
+                std::to_string(i) + " (tau=" + std::to_string(tau) +
+                ", limit=" + std::to_string(feedforward_torque_limit_[i]) +
+                ", ref_index=" + std::to_string(policy_action_.reference_index) +
+                ")";
         return false;
       }
     }
     return true;
+  }
+
+  std::string transition_progress_message_locked(
+      const std::array<double, kJointCount> &destination) const {
+    std::size_t worst_joint = 0;
+    double worst_position_error = 0.0;
+    double worst_velocity = 0.0;
+    for (std::size_t i = 0; i < kJointCount; ++i) {
+      const double position_error =
+          std::abs(low_state_.motor_state[i].q - destination[i]);
+      const double velocity = std::abs(low_state_.motor_state[i].dq);
+      if (position_error > worst_position_error) {
+        worst_position_error = position_error;
+        worst_joint = i;
+        worst_velocity = velocity;
+      }
+    }
+    return "worst joint " + std::to_string(worst_joint) +
+           " |q_err|=" + std::to_string(worst_position_error) +
+           " (tol=" + std::to_string(position_tolerance_) +
+           "), |dq|=" + std::to_string(worst_velocity) +
+           " (tol=" + std::to_string(velocity_tolerance_) +
+           "), measured_q=" +
+           std::to_string(low_state_.motor_state[worst_joint].q) +
+           ", destination_q=" + std::to_string(destination[worst_joint]);
   }
 
   void command_tick() {
@@ -525,8 +657,17 @@ class SafetySupervisor final : public rclcpp::Node {
       if (is_active(state_) && !healthy_low_state_locked()) {
         deferred_fault = "lowstate watchdog expired";
       } else if (state_ == ControlState::kPolicy) {
-        std::string policy_error;
-        if (!validate_policy_locked(policy_error)) deferred_fault = policy_error;
+        const double elapsed =
+            std::chrono::duration<double>(SteadyClock::now() - policy_started_)
+                .count();
+        if (elapsed >= duration_s_) {
+          begin_move_to_neutral_locked("policy horizon completed");
+        } else {
+          std::string policy_error;
+          if (!validate_policy_locked(policy_error)) {
+            deferred_fault = policy_error;
+          }
+        }
       }
       if (deferred_fault.empty()) {
         build_command_locked();
@@ -560,8 +701,10 @@ class SafetySupervisor final : public rclcpp::Node {
           std::chrono::duration<double>(SteadyClock::now() - transition_started_)
               .count();
       if (elapsed > transition_timeout_seconds_) {
-        latch_fault_locked("TRANSITION_TIMEOUT",
-                           "stance transition exceeded configured timeout");
+        latch_fault_locked(
+            "TRANSITION_TIMEOUT",
+            std::string("stance transition exceeded configured timeout; ") +
+                transition_progress_message_locked(destination));
         set_passive_locked();
         return;
       }
@@ -603,6 +746,11 @@ class SafetySupervisor final : public rclcpp::Node {
       }
     }
 
+    const auto &kp =
+        (state_ == ControlState::kPolicy) ? policy_kp_ : transition_kp_;
+    const auto &kd =
+        (state_ == ControlState::kPolicy) ? policy_kd_ : transition_kd_;
+
     const double step_seconds = 1.0 / command_rate_hz_;
     for (std::size_t i = 0; i < kJointCount; ++i) {
       const double maximum_step = target_rate_limit_[i] * step_seconds;
@@ -614,8 +762,8 @@ class SafetySupervisor final : public rclcpp::Node {
       motor.mode = kServoMotorMode;
       motor.q = static_cast<float>(limited_target);
       motor.dq = static_cast<float>(velocity[i]);
-      motor.kp = static_cast<float>(kp_[i]);
-      motor.kd = static_cast<float>(kd_[i]);
+      motor.kp = static_cast<float>(kp[i]);
+      motor.kd = static_cast<float>(kd[i]);
       motor.tau = static_cast<float>(torque[i]);
     }
     for (std::size_t i = kJointCount; i < low_command_.motor_cmd.size(); ++i) {
@@ -652,6 +800,8 @@ class SafetySupervisor final : public rclcpp::Node {
       observation.header.stamp = now();
       observation.header.frame_id = "go2_body";
       observation.sequence = ++observation_sequence_;
+      observation.policy_active = (state_ == ControlState::kPolicy);
+      observation.policy_epoch = policy_epoch_;
       for (std::size_t i = 0; i < kJointCount; ++i) {
         observation.joint_position[i] = low_state_.motor_state[i].q;
         observation.joint_velocity[i] = low_state_.motor_state[i].dq;
@@ -675,9 +825,11 @@ class SafetySupervisor final : public rclcpp::Node {
         const double elapsed =
             std::chrono::duration<double>(SteadyClock::now() - policy_started_)
                 .count();
-        const double angle = 2.0 * kPi * elapsed / phase_period_seconds_;
+        observation.policy_time_seconds = elapsed;
+        const double angle = 2.0 * kPi * elapsed / duration_s_;
         observation.phase_cos_sin = {{std::cos(angle), std::sin(angle)}};
       } else {
+        observation.policy_time_seconds = 0.0;
         observation.phase_cos_sin = {{1.0, 0.0}};
       }
     }
@@ -739,7 +891,7 @@ class SafetySupervisor final : public rclcpp::Node {
   bool have_policy_action_{false};
   double command_rate_hz_{};
   double policy_rate_hz_{};
-  double phase_period_seconds_{};
+  double duration_s_{};
   double low_state_timeout_seconds_{};
   double policy_timeout_seconds_{};
   double ready_transition_seconds_{};
@@ -751,7 +903,9 @@ class SafetySupervisor final : public rclcpp::Node {
   double quaternion_max_norm_{};
   double shutdown_passive_seconds_{};
   int qos_depth_{};
-  std::array<double, kJointCount> kp_{}, kd_{}, ready_position_{},
+  uint64_t policy_epoch_{0};
+  std::array<double, kJointCount> transition_kp_{}, transition_kd_{},
+      policy_kp_{}, policy_kd_{}, ready_position_{},
       neutral_position_{}, joint_position_min_{}, joint_position_max_{},
       desired_velocity_limit_{}, target_rate_limit_{},
       feedforward_torque_limit_{}, transition_start_position_{},
