@@ -1,13 +1,13 @@
-# MuJoCo simulation profile for the Unitree Go2.
+# Hardware-mode development profile for the Unitree Go2.
 #
-# This profile sends active LowCmd messages to unitree_mujoco. It must not be
-# reused for physical hardware without reviewing all limits and safety settings.
+# WARNING: Its gains and limits were copied from the MuJoCo profile and are not
+# certified for a physical robot. Replace and review them before physical use.
 
 safety_supervisor:
   ros__parameters:
-    # Keep hardware mode disabled. The simulator does not require the physical
-    # robot ownership acknowledgment.
-    hardware_mode: false
+    # Pressing `o` in keyboard_control performs the firmware motion-switcher
+    # release and only acknowledges ownership after verified deactivation.
+    hardware_mode: true
     hardware_profile_complete: true
 
     # Controller rates
@@ -40,10 +40,10 @@ safety_supervisor:
     # RR_hip, RR_thigh, RR_calf,
     # RL_hip, RL_thigh, RL_calf
     # Used for transitions/holds; policy-mode gains come from the policy package.
-    transition_kp: [60.0, 60.0, 60.0,
-                    60.0, 60.0, 60.0,
-                    60.0, 60.0, 60.0,
-                    60.0, 60.0, 60.0]
+    transition_kp: [100.0, 100.0, 100.0,
+                    100.0, 100.0, 100.0,
+                    100.0, 100.0, 100.0,
+                    100.0, 100.0, 100.0]
 
     transition_kd: [5.0, 5.0, 5.0,
                     5.0, 5.0, 5.0,
@@ -111,7 +111,7 @@ policy_runner:
 
 logging:
   enabled: true
-  output_directory: /workspace/bags
+  output_directory: /home/fengjun/robot/ws_control/bags
   storage: sqlite3
 
   topics:

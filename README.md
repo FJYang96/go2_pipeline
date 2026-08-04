@@ -21,29 +21,35 @@ The default experiment profile is deliberately local-only and uses
 real hardware limits, change the topics to `/lowstate` and `/lowcmd`, and set
 `hardware_profile_complete: true` only after review.
 
-Hardware launch requires manual shutdown of Unitree sport mode and an explicit
-per-run acknowledgment:
+Hardware mode is read from the selected YAML unless explicitly overridden on
+the command line:
 
 ```bash
 ros2 launch go2_nn_control control.launch.py \
   config:=/absolute/path/to/experiment.yaml \
-  hardware_mode:=true \
-  ownership_ack:=SPORT_MODE_DISABLED
+  hardware_mode:=true
 ```
 
-The supervisor additionally requires healthy `/lowstate` before arming. It
-cannot detect a controller internal to robot firmware; the ownership phrase is
-an operator assertion, not proof.
+The supervisor requires healthy `/lowstate` before ownership or arming. In
+hardware mode, pressing `o` calls Unitree's motion switcher: it checks the
+active firmware mode, sends `ReleaseMode`, and checks until the firmware reports
+that no motion mode remains active. It waits for a configurable settling period,
+then requires the supervisor to become the sole `/lowcmd` publisher. Pressing
+`q` from `PASSIVE` restores the captured firmware mode (or `normal`), verifies
+it, and removes the supervisor publisher. Both handoffs assume the robot is in
+a stable sit on the ground.
 
 ## Controls
 
 | Key | Service | Effect |
 |---|---|---|
-| `o` | `/ws_control/acknowledge_ownership` | Local-mode acknowledgment |
-| `a` | `/ws_control/arm` | Move to ready |
+| `o` | `/ws_control/acknowledge_ownership` | Local acknowledgment or verified hardware firmware release |
+| `q` | `/ws_control/release_ownership` | Return owned hardware from passive to firmware control |
+| `a` | `/ws_control/arm` | Move passive or neutral hold to ready |
 | `p` | `/ws_control/start_policy` | Reset reference/phase and start |
 | `s` | `/ws_control/stop_policy` | Stop and hold measured pose |
 | `r` | `/ws_control/recover` | Move held pose to neutral |
+| `d` | `/ws_control/disarm` | Move neutral hold to passive (stable sit only) |
 | `e` or Space | `/ws_control/estop` | Latch passive zero-torque mode |
 | `x` | `/ws_control/reset_estop` | Reset only with healthy state |
 

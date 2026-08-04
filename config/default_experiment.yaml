@@ -5,7 +5,6 @@ safety_supervisor:
   ros__parameters:
     hardware_mode: false
     hardware_profile_complete: false
-    ownership_acknowledged: false
 
     command_rate_hz: 500.0
     # Desktop-safe defaults for the CLI-driven loopback tests. A reviewed
@@ -24,6 +23,10 @@ safety_supervisor:
     quaternion_min_norm: 0.90
     quaternion_max_norm: 1.10
     shutdown_passive_seconds: 0.25
+    motion_switcher_response_timeout_seconds: 5.0
+    motion_switcher_verify_timeout_seconds: 10.0
+    motion_switcher_publisher_settle_seconds: 2.0
+    motion_switcher_publisher_timeout_seconds: 10.0
 
     # Native Unitree motor order: FR, FL, RR, RL, three joints per leg.
     # Used for transitions/holds; policy-mode gains come from the policy package.

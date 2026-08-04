@@ -13,9 +13,6 @@ from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
 
-OWNERSHIP_PHRASE = "SPORT_MODE_DISABLED"
-
-
 def _onnxruntime_version():
     version_file = Path(
         os.environ.get("ONNXRUNTIME_ROOT", "/opt/onnxruntime")
@@ -29,6 +26,17 @@ def _scalar_or_list(value):
     if isinstance(value, list):
         return value
     return [float(value)] * 12
+
+
+def _resolve_hardware_mode(configured_value, override):
+    if not isinstance(configured_value, bool):
+        raise RuntimeError("configured hardware_mode must be a YAML boolean")
+    override = override.strip().lower()
+    if not override:
+        return bool(configured_value)
+    if override not in {"true", "false"}:
+        raise RuntimeError("hardware_mode override must be true, false, or empty")
+    return override == "true"
 
 
 def _write_runtime_environment(run_directory, policy_dir):
@@ -71,15 +79,15 @@ def _snapshot_policy_artifacts(run_directory, policy_dir):
 
 def _launch(context):
     config_path = Path(LaunchConfiguration("config").perform(context)).resolve()
-    hardware_mode = LaunchConfiguration("hardware_mode").perform(context).lower() == "true"
-    ownership = LaunchConfiguration("ownership_ack").perform(context)
+    hardware_override = LaunchConfiguration("hardware_mode").perform(context)
     policy_dir = LaunchConfiguration("policy_dir").perform(context).strip()
 
     with config_path.open("r", encoding="utf-8") as stream:
         config = yaml.safe_load(stream)
     supervisor_params = dict(config["safety_supervisor"]["ros__parameters"])
-    supervisor_params["hardware_mode"] = hardware_mode
-    supervisor_params["ownership_acknowledged"] = ownership == OWNERSHIP_PHRASE
+    supervisor_params["hardware_mode"] = _resolve_hardware_mode(
+        supervisor_params["hardware_mode"], hardware_override
+    )
     supervisor_params["policy_dir"] = policy_dir
     policy_params = dict(config["policy_runner"]["ros__parameters"])
     policy_params["policy_dir"] = policy_dir
@@ -141,8 +149,7 @@ def generate_launch_description():
     return LaunchDescription(
         [
             DeclareLaunchArgument("config", default_value=default_config),
-            DeclareLaunchArgument("hardware_mode", default_value="false"),
-            DeclareLaunchArgument("ownership_ack", default_value=""),
+            DeclareLaunchArgument("hardware_mode", default_value=""),
             DeclareLaunchArgument("policy_dir", default_value=""),
             OpaqueFunction(function=_launch),
         ]

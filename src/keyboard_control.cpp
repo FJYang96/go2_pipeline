@@ -36,10 +36,12 @@ class KeyboardControl final : public rclcpp::Node {
   KeyboardControl() : Node("keyboard_control") {
     key_to_service_ = {
         {'o', "/ws_control/acknowledge_ownership"},
+        {'q', "/ws_control/release_ownership"},
         {'a', "/ws_control/arm"},
         {'p', "/ws_control/start_policy"},
         {'s', "/ws_control/stop_policy"},
         {'r', "/ws_control/recover"},
+        {'d', "/ws_control/disarm"},
         {'e', "/ws_control/estop"},
         {' ', "/ws_control/estop"},
         {'x', "/ws_control/reset_estop"},
@@ -50,8 +52,9 @@ class KeyboardControl final : public rclcpp::Node {
     }
     timer_ = create_wall_timer(std::chrono::milliseconds(20),
                                [this] { poll_keyboard(); });
-    std::cout << "\nGo2 controls: [o] ownership  [a] arm  [p] policy  "
-                 "[s] stop/hold  [r] recover  [e/SPACE] E-STOP  [x] reset\n"
+    std::cout << "\nGo2 controls: [o] ownership  [q] firmware control  "
+                 "[a] arm  [p] policy  [s] stop/hold  [r] recover  "
+                 "[d] disarm  [e/SPACE] E-STOP  [x] reset\n"
               << std::flush;
   }
 
@@ -67,9 +70,24 @@ class KeyboardControl final : public rclcpp::Node {
       RCLCPP_WARN(get_logger(), "%s is not ready", service->second.c_str());
       return;
     }
-    auto future =
-        client->async_send_request(std::make_shared<std_srvs::srv::Trigger::Request>());
-    (void)future;
+    client->async_send_request(
+        std::make_shared<std_srvs::srv::Trigger::Request>(),
+        [this, key, service_name = service->second](
+            rclcpp::Client<std_srvs::srv::Trigger>::SharedFuture future) {
+          try {
+            const auto response = future.get();
+            if (response->success) {
+              RCLCPP_INFO(get_logger(), "key '%c' succeeded via %s: %s", key,
+                          service_name.c_str(), response->message.c_str());
+            } else {
+              RCLCPP_WARN(get_logger(), "key '%c' failed via %s: %s", key,
+                          service_name.c_str(), response->message.c_str());
+            }
+          } catch (const std::exception &error) {
+            RCLCPP_ERROR(get_logger(), "key '%c' call to %s failed: %s", key,
+                         service_name.c_str(), error.what());
+          }
+        });
     RCLCPP_INFO(get_logger(), "sent key '%c' to %s", key,
                 service->second.c_str());
   }

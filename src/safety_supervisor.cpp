@@ -9,9 +9,10 @@
 #include <mutex>
 #include <stdexcept>
 #include <string>
-#include <vector>
 #include <thread>
+#include <vector>
 
+#include "go2_nn_control/motion_switcher_client.hpp"
 #include "go2_nn_control/msg/applied_command.hpp"
 #include "go2_nn_control/msg/policy_action.hpp"
 #include "go2_nn_control/msg/policy_observation.hpp"
@@ -39,6 +40,7 @@ enum class ControlState {
   kHoldCurrent,
   kMoveToNeutral,
   kNeutralHold,
+  kFirmwareControl,
   kEstop,
 };
 
@@ -51,6 +53,7 @@ const char *state_name(ControlState state) {
     case ControlState::kHoldCurrent: return "HOLD_CURRENT";
     case ControlState::kMoveToNeutral: return "MOVE_TO_NEUTRAL";
     case ControlState::kNeutralHold: return "NEUTRAL_HOLD";
+    case ControlState::kFirmwareControl: return "FIRMWARE_CONTROL";
     case ControlState::kEstop: return "ESTOP";
   }
   return "UNKNOWN";
@@ -62,7 +65,9 @@ double minimum_jerk(double progress) {
 }
 
 bool is_active(ControlState state) {
-  return state != ControlState::kPassive && state != ControlState::kEstop;
+  return state != ControlState::kPassive &&
+         state != ControlState::kFirmwareControl &&
+         state != ControlState::kEstop;
 }
 
 }  // namespace
@@ -110,6 +115,14 @@ class SafetySupervisor final : public rclcpp::Node {
           if (message->data) latch_fault("MANUAL_ESTOP", "E-stop topic asserted");
         });
 
+    ownership_callback_group_ =
+        create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
+    if (hardware_mode_) {
+      motion_response_callback_group_ =
+          create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
+      motion_switcher_ = std::make_unique<MotionSwitcherClient>(
+          this, motion_response_callback_group_);
+    }
     create_services();
     command_timer_ = create_wall_timer(
         std::chrono::duration_cast<std::chrono::nanoseconds>(
@@ -187,8 +200,7 @@ class SafetySupervisor final : public rclcpp::Node {
     hardware_mode_ = required_parameter<bool>("hardware_mode");
     hardware_profile_complete_ =
         required_parameter<bool>("hardware_profile_complete");
-    ownership_acknowledged_ =
-        required_parameter<bool>("ownership_acknowledged");
+    ownership_acknowledged_ = false;
     command_rate_hz_ = required_parameter<double>("command_rate_hz");
     low_state_timeout_seconds_ =
         required_parameter<double>("low_state_timeout_seconds");
@@ -206,6 +218,14 @@ class SafetySupervisor final : public rclcpp::Node {
     quaternion_max_norm_ = required_parameter<double>("quaternion_max_norm");
     shutdown_passive_seconds_ =
         required_parameter<double>("shutdown_passive_seconds");
+    motion_switcher_response_timeout_seconds_ =
+        required_parameter<double>("motion_switcher_response_timeout_seconds");
+    motion_switcher_verify_timeout_seconds_ =
+        required_parameter<double>("motion_switcher_verify_timeout_seconds");
+    motion_switcher_publisher_settle_seconds_ =
+        required_parameter<double>("motion_switcher_publisher_settle_seconds");
+    motion_switcher_publisher_timeout_seconds_ =
+        required_parameter<double>("motion_switcher_publisher_timeout_seconds");
 
     transition_kp_ = get_array_parameter<double>("transition_kp");
     transition_kd_ = get_array_parameter<double>("transition_kd");
@@ -271,11 +291,9 @@ class SafetySupervisor final : public rclcpp::Node {
       }
     }
 
-    if (hardware_mode_ &&
-        (!hardware_profile_complete_ || !ownership_acknowledged_)) {
+    if (hardware_mode_ && !hardware_profile_complete_) {
       throw std::runtime_error(
-          "hardware mode requires a complete profile and per-run ownership "
-          "acknowledgment");
+          "hardware mode requires a complete profile");
     }
     if (hardware_mode_ &&
         (low_state_topic_ != "/lowstate" || low_command_topic_ != "/lowcmd")) {
@@ -284,7 +302,11 @@ class SafetySupervisor final : public rclcpp::Node {
     }
     if (command_rate_hz_ <= 0.0 || policy_rate_hz_ <= 0.0 ||
         duration_s_ <= 0.0 || low_state_timeout_seconds_ <= 0.0 ||
-        policy_timeout_seconds_ <= 0.0 || shutdown_passive_seconds_ < 0.0) {
+        policy_timeout_seconds_ <= 0.0 || shutdown_passive_seconds_ < 0.0 ||
+        motion_switcher_response_timeout_seconds_ <= 0.0 ||
+        motion_switcher_verify_timeout_seconds_ <= 0.0 ||
+        motion_switcher_publisher_settle_seconds_ < 0.0 ||
+        motion_switcher_publisher_timeout_seconds_ <= 0.0) {
       throw std::runtime_error("rates, duration, and watchdogs must be positive");
     }
     for (std::size_t i = 0; i < kJointCount; ++i) {
@@ -359,35 +381,208 @@ class SafetySupervisor final : public rclcpp::Node {
     transition_to_locked(ControlState::kMoveToNeutral, reason);
   }
 
+  std::chrono::milliseconds response_timeout() const {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::duration<double>(motion_switcher_response_timeout_seconds_));
+  }
+
+  void enable_passive_low_command_locked() {
+    if (!low_command_publisher_) {
+      low_command_publisher_ = create_publisher<unitree_go::msg::LowCmd>(
+          low_command_topic_, qos_depth_);
+    }
+    set_passive_locked();
+    set_unitree_crc(low_command_);
+    low_command_publisher_->publish(low_command_);
+  }
+
+  void acknowledge_hardware_ownership(
+      std_srvs::srv::Trigger::Response &response) {
+    bool reacquiring_firmware_control = false;
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      if (ownership_acknowledged_) {
+        response.success = true;
+        response.message = "hardware ownership already verified";
+        log_service_result_locked("/ws_control/acknowledge_ownership",
+                                  response);
+        return;
+      }
+      if (state_ != ControlState::kPassive &&
+          state_ != ControlState::kFirmwareControl) {
+        response.success = false;
+        response.message =
+            "hardware ownership requires PASSIVE or FIRMWARE_CONTROL; current "
+            "state is " +
+            std::string(state_name(state_));
+        log_service_result_locked("/ws_control/acknowledge_ownership",
+                                  response);
+        return;
+      }
+      if (!healthy_low_state_locked()) {
+        response.success = false;
+        response.message = have_low_state_
+                               ? "hardware ownership requires healthy /lowstate"
+                               : "hardware ownership requires /lowstate";
+        log_service_result_locked("/ws_control/acknowledge_ownership",
+                                  response);
+        return;
+      }
+      if (state_ == ControlState::kFirmwareControl ||
+          !low_command_publisher_) {
+        reacquiring_firmware_control = true;
+        enable_passive_low_command_locked();
+        if (state_ == ControlState::kFirmwareControl) {
+          transition_to_locked(ControlState::kPassive,
+                               "firmware ownership reacquisition started");
+        }
+      }
+    }
+
+    const auto result = motion_switcher_->acquire_ownership(
+        response_timeout(),
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::duration<double>(
+                motion_switcher_verify_timeout_seconds_)));
+    response.success = result.success;
+    response.message = result.message;
+
+    if (response.success) {
+      // Before ReleaseMode, Unitree's active firmware controller is expected to
+      // appear as another /lowcmd publisher. Check for competing publishers only
+      // after firmware deactivation, allowing DDS discovery a short time to
+      // remove the released endpoint from the graph.
+      if (result.release_accepted &&
+          motion_switcher_publisher_settle_seconds_ > 0.0) {
+        std::this_thread::sleep_for(std::chrono::duration<double>(
+            motion_switcher_publisher_settle_seconds_));
+      }
+      const auto publisher_deadline =
+          SteadyClock::now() + std::chrono::duration<double>(
+                                   motion_switcher_publisher_timeout_seconds_);
+      std::size_t publisher_count = count_publishers(low_command_topic_);
+      while (publisher_count != 1U && rclcpp::ok() &&
+             SteadyClock::now() < publisher_deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        publisher_count = count_publishers(low_command_topic_);
+      }
+      if (publisher_count != 1U) {
+        response.success = false;
+        response.message =
+            "firmware motion mode is inactive, but expected exactly one "
+            "supervisor publisher on " +
+            low_command_topic_ + " (publisher count=" +
+            std::to_string(publisher_count) + "); ownership not acknowledged";
+      }
+    }
+
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      if (response.success) {
+        ownership_acknowledged_ = true;
+        if (!result.mode.empty()) captured_firmware_mode_ = result.mode;
+      } else if (reacquiring_firmware_control && !result.release_accepted) {
+        low_command_publisher_.reset();
+        transition_to_locked(ControlState::kFirmwareControl,
+                             "firmware ownership reacquisition failed safely");
+      }
+      log_service_result_locked("/ws_control/acknowledge_ownership", response);
+    }
+  }
+
+  void release_hardware_ownership(
+      std_srvs::srv::Trigger::Response &response) {
+    std::string restore_mode;
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      if (state_ != ControlState::kPassive) {
+        response.success = false;
+        response.message =
+            "ownership release requires PASSIVE; current state is " +
+            std::string(state_name(state_));
+        log_service_result_locked("/ws_control/release_ownership", response);
+        return;
+      }
+      if (!ownership_acknowledged_) {
+        response.success = false;
+        response.message = "ownership release requires acknowledged ownership";
+        log_service_result_locked("/ws_control/release_ownership", response);
+        return;
+      }
+      if (!healthy_low_state_locked()) {
+        response.success = false;
+        response.message = "ownership release requires healthy /lowstate";
+        log_service_result_locked("/ws_control/release_ownership", response);
+        return;
+      }
+      restore_mode =
+          captured_firmware_mode_.empty() ? "normal" : captured_firmware_mode_;
+    }
+
+    const auto result = motion_switcher_->restore_firmware_control(
+        restore_mode, response_timeout(),
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::duration<double>(
+                motion_switcher_verify_timeout_seconds_)));
+    response.success = result.success;
+    response.message = result.message;
+
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (response.success) {
+      ownership_acknowledged_ = false;
+      have_policy_action_ = false;
+      transition_to_locked(ControlState::kFirmwareControl,
+                           "/ws_control/release_ownership accepted");
+      low_command_publisher_.reset();
+    }
+    log_service_result_locked("/ws_control/release_ownership", response);
+  }
+
   void create_services() {
     using Trigger = std_srvs::srv::Trigger;
     ownership_service_ = create_service<Trigger>(
         "/ws_control/acknowledge_ownership",
         [this](const std::shared_ptr<Trigger::Request>,
                std::shared_ptr<Trigger::Response> response) {
-          std::lock_guard<std::mutex> lock(mutex_);
           if (hardware_mode_) {
-            response->success = ownership_acknowledged_;
-            response->message = ownership_acknowledged_
-                                    ? "ownership already acknowledged at launch"
-                                    : "relaunch with the required acknowledgment";
+            acknowledge_hardware_ownership(*response);
           } else {
+            std::lock_guard<std::mutex> lock(mutex_);
             ownership_acknowledged_ = true;
             response->success = true;
             response->message = "local-mode ownership acknowledged";
+            log_service_result_locked("/ws_control/acknowledge_ownership",
+                                      *response);
           }
-          log_service_result_locked("/ws_control/acknowledge_ownership",
-                                    *response);
-        });
+        },
+        rmw_qos_profile_services_default, ownership_callback_group_);
+    release_ownership_service_ = create_service<Trigger>(
+        "/ws_control/release_ownership",
+        [this](const std::shared_ptr<Trigger::Request>,
+               std::shared_ptr<Trigger::Response> response) {
+          if (!hardware_mode_) {
+            std::lock_guard<std::mutex> lock(mutex_);
+            response->success = false;
+            response->message =
+                "firmware ownership release is available only in hardware mode";
+            log_service_result_locked("/ws_control/release_ownership",
+                                      *response);
+            return;
+          }
+          release_hardware_ownership(*response);
+        },
+        rmw_qos_profile_services_default, ownership_callback_group_);
     arm_service_ = create_service<Trigger>(
         "/ws_control/arm",
         [this](const std::shared_ptr<Trigger::Request>,
                std::shared_ptr<Trigger::Response> response) {
           std::lock_guard<std::mutex> lock(mutex_);
-          if (state_ != ControlState::kPassive) {
+          if (state_ != ControlState::kPassive &&
+              state_ != ControlState::kNeutralHold) {
             response->success = false;
-            response->message = "arm requires PASSIVE; current state is " +
-                                std::string(state_name(state_));
+            response->message =
+                "arm requires PASSIVE or NEUTRAL_HOLD; current state is " +
+                std::string(state_name(state_));
             if (state_ == ControlState::kMoveToReady) {
               response->message +=
                   " (ready transition still in progress; wait for READY_HOLD "
@@ -493,6 +688,30 @@ class SafetySupervisor final : public rclcpp::Node {
           response->success = true;
           response->message = "moving to neutral stance";
           log_service_result_locked("/ws_control/recover", *response);
+        });
+    disarm_service_ = create_service<Trigger>(
+        "/ws_control/disarm",
+        [this](const std::shared_ptr<Trigger::Request>,
+               std::shared_ptr<Trigger::Response> response) {
+          std::lock_guard<std::mutex> lock(mutex_);
+          if (state_ != ControlState::kNeutralHold) {
+            response->success = false;
+            response->message =
+                "disarm requires NEUTRAL_HOLD; current state is " +
+                std::string(state_name(state_));
+          } else if (!healthy_low_state_locked()) {
+            response->success = false;
+            response->message = "disarm requires healthy /lowstate";
+          } else {
+            have_policy_action_ = false;
+            transition_to_locked(ControlState::kPassive,
+                                 "/ws_control/disarm accepted");
+            set_passive_locked();
+            response->success = true;
+            response->message =
+                "disarmed to passive; robot must already be in a stable sit";
+          }
+          log_service_result_locked("/ws_control/disarm", *response);
         });
     estop_service_ = create_service<Trigger>(
         "/ws_control/estop",
@@ -654,6 +873,10 @@ class SafetySupervisor final : public rclcpp::Node {
     std::string deferred_fault;
     {
       std::lock_guard<std::mutex> lock(mutex_);
+      if (state_ == ControlState::kFirmwareControl ||
+          !low_command_publisher_) {
+        return;
+      }
       if (is_active(state_) && !healthy_low_state_locked()) {
         deferred_fault = "lowstate watchdog expired";
       } else if (state_ == ControlState::kPolicy) {
@@ -683,7 +906,9 @@ class SafetySupervisor final : public rclcpp::Node {
   }
 
   void build_command_locked() {
-    if (state_ == ControlState::kPassive || state_ == ControlState::kEstop) {
+    if (state_ == ControlState::kPassive ||
+        state_ == ControlState::kFirmwareControl ||
+        state_ == ControlState::kEstop) {
       set_passive_locked();
       return;
     }
@@ -902,6 +1127,10 @@ class SafetySupervisor final : public rclcpp::Node {
   double quaternion_min_norm_{};
   double quaternion_max_norm_{};
   double shutdown_passive_seconds_{};
+  double motion_switcher_response_timeout_seconds_{};
+  double motion_switcher_verify_timeout_seconds_{};
+  double motion_switcher_publisher_settle_seconds_{};
+  double motion_switcher_publisher_timeout_seconds_{};
   int qos_depth_{};
   uint64_t policy_epoch_{0};
   std::array<double, kJointCount> transition_kp_{}, transition_kd_{},
@@ -913,6 +1142,7 @@ class SafetySupervisor final : public rclcpp::Node {
   QuaternionWxyz start_quaternion_{{1.0, 0.0, 0.0, 0.0}};
   std::string low_state_topic_, low_command_topic_, observation_topic_,
       policy_action_topic_, applied_command_topic_, status_topic_, estop_topic_;
+  std::string captured_firmware_mode_;
   std::string fault_code_, fault_message_;
   uint64_t observation_sequence_{0};
   SteadyClock::time_point last_low_state_time_{}, last_policy_time_{},
@@ -930,9 +1160,12 @@ class SafetySupervisor final : public rclcpp::Node {
   rclcpp::Subscription<msg::PolicyAction>::SharedPtr policy_subscription_;
   rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr estop_subscription_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr ownership_service_,
-      arm_service_, start_service_, stop_service_, recover_service_,
-      estop_service_, reset_service_;
+      release_ownership_service_, arm_service_, start_service_, stop_service_,
+      recover_service_, disarm_service_, estop_service_, reset_service_;
   rclcpp::TimerBase::SharedPtr command_timer_, observation_timer_, status_timer_;
+  rclcpp::CallbackGroup::SharedPtr ownership_callback_group_,
+      motion_response_callback_group_;
+  std::unique_ptr<MotionSwitcherClient> motion_switcher_;
 };
 
 }  // namespace go2_nn_control
@@ -940,7 +1173,12 @@ class SafetySupervisor final : public rclcpp::Node {
 int main(int argc, char **argv) {
   rclcpp::init(argc, argv);
   try {
-    rclcpp::spin(std::make_shared<go2_nn_control::SafetySupervisor>());
+    auto supervisor = std::make_shared<go2_nn_control::SafetySupervisor>();
+    rclcpp::ExecutorOptions executor_options;
+    executor_options.context = rclcpp::contexts::get_global_default_context();
+    rclcpp::executors::MultiThreadedExecutor executor(executor_options, 3U);
+    executor.add_node(supervisor);
+    executor.spin();
   } catch (const std::exception &error) {
     std::cerr << "Safety supervisor refused to start: " << error.what()
               << std::endl;

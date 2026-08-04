@@ -188,6 +188,10 @@ ros2 topic echo /ws_control/status
 Expected behavior: states progress through `HOLD_CURRENT`,
 `MOVE_TO_NEUTRAL`, and `NEUTRAL_HOLD`.
 
+From `NEUTRAL_HOLD`, either call `/ws_control/arm` (keyboard `a`) to move
+directly back to `READY_HOLD`, or—only after confirming a stable sit—call
+`/ws_control/disarm` (keyboard `d`) to enter passive without latching a fault.
+
 ### 4. Exercise E-stop and reset
 
 ```bash
@@ -291,8 +295,9 @@ Prerequisites:
 
 - Robot fully supported with feet clear of the ground.
 - Independent physical torque/power cutoff within reach.
-- Unitree sport mode manually disabled.
-- Exactly one intended `/lowcmd` publisher.
+- Robot fully supported before releasing Unitree's active motion mode.
+- After firmware release, exactly one intended `/lowcmd` publisher. The active
+  firmware controller may appear as an additional publisher before pressing `o`.
 - A copied experiment YAML with real limits/stances,
   `hardware_profile_complete: true`, and `/lowstate`/`/lowcmd` topics.
 - Do not call `arm` during this level.
@@ -312,8 +317,7 @@ cd /home/fengjun/robot/ws_control
 source install/setup.zsh
 ros2 launch go2_nn_control control.launch.py \
   config:=/absolute/path/to/reviewed_experiment.yaml \
-  hardware_mode:=true \
-  ownership_ack:=SPORT_MODE_DISABLED
+  hardware_mode:=true
 ```
 
 In another configured terminal:
@@ -321,6 +325,10 @@ In another configured terminal:
 ```bash
 ros2 topic echo /ws_control/status
 # Press Ctrl-C after the first message.
+ros2 service call /ws_control/acknowledge_ownership std_srvs/srv/Trigger "{}"
+# Require a successful, verified firmware-release response before continuing;
+# status must report ownership_acknowledged: true. Keyboard `o` calls the same
+# service and prints its final success or failure message.
 ros2 topic echo /ws_control/applied_command
 # Press Ctrl-C after the first message.
 ros2 service call /ws_control/estop std_srvs/srv/Trigger "{}"
@@ -331,6 +339,12 @@ ros2 service call /ws_control/reset_estop std_srvs/srv/Trigger "{}"
 
 Expected behavior: status begins in `PASSIVE`; every motor mode is passive;
 Kp, Kd, and torque remain zero before, during, and after E-stop/reset.
+
+For the bidirectional ownership test, keep the robot in a stable sit, call
+`/ws_control/release_ownership`, and require state `FIRMWARE_CONTROL` with
+`ownership_acknowledged: false`. The supervisor `/lowcmd` publisher disappears.
+Calling `/ws_control/acknowledge_ownership` again recreates passive output,
+releases the restored firmware mode, and returns to owned `PASSIVE`.
 
 Immediately use the physical cutoff and stop the launch if any actuator
 produces torque or unexpected motion.
